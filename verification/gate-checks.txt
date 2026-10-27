@@ -1,0 +1,41 @@
+Continuum verification log
+Date: 2026-10-26
+Environment: macOS arm64; Apple clang 21; pinned Goose v2026.3
+(toolchain under .build/, ignored by git); lab double on a Linux host
+over Tailscale when noted.
+
+Command (from the repository root):
+make -B check status sim daemon test native-check meta-live \
+  GOOSE=$PWD/.build/toolchain/goose-v2026.3-macos-arm64/goose
+Final exit code: 0.
+
+- Goose check: 387 top-level declarations, 19 file(s); typecheck clean.
+- Goose status: builds and prints the implementation ledger. Provider and
+  continuation report failed with no key configured (fail-closed, no
+  network attempted); sim-backed entries report their real state.
+- Goose sim: deterministic transcript, SIM_LOOP_ALL_GREEN.
+- Goose daemon: deterministic transcript (ticks=12 applies=1 restores=1
+  escalations=0 model_calls=0), identical across runs.
+- Goose test suites (sim-only, no network):
+  sim_loop (SIM_LOOP_ALL_GREEN), foundation (FOUNDATION_ALL_GREEN),
+  toolbind (TOOLBIND_ALL_GREEN, incl. Meta request/continuation shape
+  and typed response parsing), metamorphic (METAMORPHIC_ALL_GREEN).
+  Two mutation spot-checks confirm the suites bite.
+- C++ native-check: -fsyntax-only with C++20 -Wall -Wextra -Werror over
+  the fallback stub, router HTTP backend and Meta HTTPS adapter: clean.
+- C++ fallback status: Meta session API not_implemented (-100); zero handle.
+- Manual web-e2e (needs lab/router_server.py + ROUTER_PASSWORD, not part
+  of `make test`): WEB_E2E_ALL_GREEN against the virtual router -
+  envelope validation, guardian admission, HTTP apply (revision +1),
+  readback reconcile, restore, post-restore drift. No physical router
+  touched.
+- Manual meta-live (needs MODEL_API_KEY for the live leg, not part of
+  `make test`): without a key, fail-closed green - absent key fails
+  before any socket, provenance Unset, no tool call
+  (META_LIVE_SKIPPED_NO_KEY). With a key it spends one bounded
+  Responses call and prints META_LIVE_ROUND_TRIP.
+
+Scope: syntax, sim behavior, contract enforcement and the two manual
+probes above. No live Meta call, real-router mutation, measured
+Internet performance or hackathon result is claimed here. Synthetic
+fixtures are designed inputs, never recorded provider output.

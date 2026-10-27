@@ -1,0 +1,6 @@
+// Continuum native transport for the main program root: the router HTTP
+// backend and the Meta HTTPS adapter behind the extern fns in src.
+c_sources = ["../native/goose_bridge.c", "../native/router_web.cpp",
+             "../native/meta_web.cpp"];
+c_libs_macos = ["c++"];
+c_libs_linux = ["stdc++"];

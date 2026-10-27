@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "run_id": "run-example",
+  "task_id": "release-audit-example",
+  "task_revision": 2,
+  "decision": "insufficient_evidence",
+  "findings": [],
+  "missing_evidence_ids": [
+    "authoritative-release-status"
+  ],
+  "summary": "Synthetic output-shape example. No real release was reviewed."
+}

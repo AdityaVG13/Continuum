@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "example_only": true,
+  "session_id": "session-example",
+  "request_id": "controller-example-1",
+  "now_ms": 10000,
+  "decision_deadline_ms": 20000,
+  "model_role": "controller",
+  "observation": {
+    "schema_version": "1.0",
+    "observation_id": "obs-synthetic-3",
+    "session_id": "session-example",
+    "run_id": "run-example",
+    "scope_id": "lab-uplink",
+    "path_id": "owned-lab-path",
+    "route_epoch": 1,
+    "sampled_at_ms": 9000,
+    "window_ms": 1000,
+    "source": "synthetic_fixture",
+    "sample_count": 20,
+    "baseline_ready": true,
+    "gateway_rtt_p95_ms": 2.0,
+    "remote_rtt_p95_ms": 240.0,
+    "remote_idle_rtt_p95_ms": 25.0,
+    "app_echo_p95_ms": 255.0,
+    "app_idle_echo_p95_ms": 30.0,
+    "provider_elapsed_ms": null,
+    "uplink_utilization": 0.96,
+    "loss_fraction": 0.01,
+    "consecutive_bad_windows": 3,
+    "notes": "Manually authored synthetic values for contract review; not measurements."
+  },
+  "task": {
+    "schema_version": "1.0",
+    "run_id": "run-example",
+    "task_id": "release-audit-example",
+    "task_revision": 2,
+    "state": "running",
+    "semantic_goal": "Review supplied release evidence and identify supported blockers.",
+    "pending_step_id": "interpret-release-evidence",
+    "completed_steps": 3,
+    "remaining_steps": 5,
+    "deadline_ms": 120000,
+    "quality_floor": "All release blockers must cite exact supplied evidence; missing evidence is explicit.",
+    "input_object_ids": [
+      "release-notes",
+      "test-report",
+      "dependency-manifest"
+    ],
+    "remote_dependencies": [
+      "meta-model-api",
+      "owned-evidence-service"
+    ],
+    "local_eligible": false,
+    "side_effect_class": "read_only"
+  },
+  "available_profiles": {
+    "config_revision": 7,
+    "profiles": [
+      {
+        "profile_id": "balanced-calibrated",
+        "label": "Synthetic calibrated profile for schema demonstration",
+        "scope_id": "lab-uplink",
+        "path_id": "owned-lab-path",
+        "egress_kbit_per_s": 9000,
+        "max_lease_ms": 30000,
+        "restorable": true
+      }
+    ]
+  },
+  "active_lease_id": null,
+  "remaining_incident_turns": 10,
+  "allowed_tools": [
+    "read_observation",
+    "read_task_context",
+    "list_profiles",
+    "apply_profile",
+    "read_action_result",
+    "restore_profile"
+  ]
+}

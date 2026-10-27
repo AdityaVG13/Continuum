@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "call_id": "call-example-1",
+  "request_id": "action-example-1",
+  "tool": "apply_profile",
+  "status": "not_implemented",
+  "data": {},
+  "error_code": "NOT_IMPLEMENTED",
+  "message": "Example only. No Meta call, network change or measurement occurred."
+}

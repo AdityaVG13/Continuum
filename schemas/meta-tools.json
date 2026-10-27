@@ -1,0 +1,223 @@
+[
+  {
+    "type": "function",
+    "name": "read_observation",
+    "description": "Read a bounded current path observation. Unknown fields remain null; this tool cannot change the network.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "max_age_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "path_id",
+        "max_age_ms"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "read_task_context",
+    "description": "Read the active task, deadline, required evidence and pending dependencies.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "list_profiles",
+    "description": "List the currently authorized finite network profiles and configuration revision.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        }
+      },
+      "required": [
+        "scope_id"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "apply_profile",
+    "description": "Request a reversible, leased change to a listed profile. A local guardian validates the request before any actuation; a call is not proof of success.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "path_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "task_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "route_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "config_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "lease_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "request_id",
+        "scope_id",
+        "path_id",
+        "profile_id",
+        "observation_id",
+        "task_revision",
+        "route_epoch",
+        "config_revision",
+        "lease_ms",
+        "rationale"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "read_action_result",
+    "description": "Read admission, actuation, readback and subsequent verification for one action.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        }
+      },
+      "required": [
+        "action_id"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "restore_profile",
+    "description": "Request restoration of this run's owned lease. Revision and ownership checks remain mandatory.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "lease_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "request_id",
+        "scope_id",
+        "lease_id",
+        "expected_revision",
+        "observation_id",
+        "rationale"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  }
+]

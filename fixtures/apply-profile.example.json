@@ -1,0 +1,15 @@
+{
+  "tool": "apply_profile",
+  "arguments": {
+    "request_id": "action-example-1",
+    "scope_id": "lab-uplink",
+    "path_id": "owned-lab-path",
+    "profile_id": "balanced-calibrated",
+    "observation_id": "obs-synthetic-3",
+    "task_revision": 2,
+    "route_epoch": 1,
+    "config_revision": 7,
+    "lease_ms": 30000,
+    "rationale": "Synthetic example: stable gateway and elevated remote echo under sustained upload make an owned-queue trial plausible; verify latency and useful throughput."
+  }
+}

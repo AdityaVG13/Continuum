@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "run_id": "run-example",
+  "task_id": "release-audit-example",
+  "task_revision": 2,
+  "decision": "hold",
+  "findings": [
+    {
+      "finding_id": "REL-17",
+      "severity": "blocker",
+      "summary": "The exact candidate has no successful migration rollback rehearsal, which the rollout policy requires.",
+      "evidence_ids": ["ci-summary:v1", "rollout-policy:v1"]
+    },
+    {
+      "finding_id": "SEC-42",
+      "severity": "blocker",
+      "summary": "The candidate retains an unresolved high-severity authorization defect and has no approved exception.",
+      "evidence_ids": ["security-review:v1", "rollout-policy:v1"]
+    }
+  ],
+  "missing_evidence_ids": [],
+  "summary": "Authored synthetic expected-shape example, not a Meta response. Hold deployment until the two policy blockers are resolved and verified."
+}

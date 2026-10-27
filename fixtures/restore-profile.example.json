@@ -1,0 +1,11 @@
+{
+  "tool": "restore_profile",
+  "arguments": {
+    "request_id": "restore-example-1",
+    "scope_id": "lab-uplink",
+    "lease_id": "lease-example-1",
+    "expected_revision": 8,
+    "observation_id": "obs-synthetic-8",
+    "rationale": "Synthetic example: the protected step is complete; request restoration and confirm readback."
+  }
+}

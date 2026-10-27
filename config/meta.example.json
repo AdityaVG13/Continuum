@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "artifact_status": "configuration_example_not_loaded",
+  "provider": "meta",
+  "base_url": "https://api.meta.ai/v1",
+  "responses_path": "/responses",
+  "api_key_env": "MODEL_API_KEY",
+  "controller": {
+    "required": true,
+    "model_id": "muse-wonder-1.0",
+    "prompt_file": "prompts/controller.md",
+    "request_deadline_ms": 10000,
+    "max_output_tokens": 2048,
+    "reasoning_effort": "low",
+    "max_turns_per_incident": 10,
+    "max_in_flight_requests": 1
+  },
+  "workload": {
+    "required": true,
+    "model_id": "muse-wonder-1.0",
+    "prompt_file": "prompts/workload.md",
+    "request_deadline_ms": 30000,
+    "max_output_tokens": 4096,
+    "reasoning_effort": "medium"
+  },
+  "protocol": {
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "stream": false,
+    "history_mode": "stateless_encrypted_replay",
+    "store": false,
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "max_response_bytes": 1048576,
+    "max_tool_argument_bytes": 8192
+  },
+  "retry": {
+    "max_transport_retries": 1,
+    "retry_only_before_request_deadline": true,
+    "never_reexecute_a_tool_from_transport_retry": true
+  },
+  "fallback_provider": null,
+  "reviewer": {
+    "enabled": false,
+    "candidate_model_id": "muse-spark-1.3"
+  },
+  "local_model": {
+    "enabled": false,
+    "candidate": "Muse Glimmer",
+    "profile_id": null,
+    "requires_device_and_quality_gate": true
+  },
+  "access_status": "requires_real_account_and_event_preflight"
+}

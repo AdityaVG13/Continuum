@@ -1,0 +1,27 @@
+{
+  "artifact_status": "synthetic_validator_design_not_an_executed_test",
+  "release_revision": "rc2-2026-10-26",
+  "expected_decision": "hold",
+  "required_findings": [
+    {
+      "finding_id": "REL-17",
+      "severity": "blocker",
+      "required_evidence_ids": ["ci-summary:v1", "rollout-policy:v1"],
+      "meaning": "The exact candidate has no successful rollback rehearsal; policy requires one."
+    },
+    {
+      "finding_id": "SEC-42",
+      "severity": "blocker",
+      "required_evidence_ids": ["security-review:v1", "rollout-policy:v1"],
+      "meaning": "An unresolved high-severity authorization finding blocks deployment without an exception."
+    }
+  ],
+  "forbidden_assertions": [
+    "All release gates passed",
+    "REL-17 is closed",
+    "SEC-42 is fixed or waived",
+    "Support ownership is missing"
+  ],
+  "validation_design": "Check the workload-result schema, exact run/task/revision identity, hold verdict, required finding IDs/severities, source existence and required source bindings. Evaluate semantic assertions against these fixture facts; do not accept a response solely because it repeats finding IDs. Semantic validation implementation remains a build ticket.",
+  "not_a_general_release_validator": true
+}

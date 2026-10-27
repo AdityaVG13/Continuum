@@ -1,0 +1,14 @@
+{
+  "edition": "3.0",
+  "status": "specification_plus_first_vertical_transport",
+  "date": "2026-10-26",
+  "goose_suites": "sim_loop, foundation, toolbind, metamorphic: all green",
+  "manual_probes": "web-e2e WEB_E2E_ALL_GREEN (virtual router); meta-live fail-closed green without key",
+  "json_parse_checks": 20,
+  "json_schema_draft_validation": "not_run; parsing and referenced-file checks only",
+  "source_checks": "See gate-checks.txt; sim behavior and contract enforcement only",
+  "pdf": "20 pages, regenerated from docs/SPECIFICATION.md; architecture final page inspected separately",
+  "fixture_provenance": "authored_synthetic",
+  "live_meta_calls": 0,
+  "network_mutations": 0
+}

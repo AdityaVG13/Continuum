@@ -1,0 +1,36 @@
+{
+  "edition": "3.0-scaffold",
+  "primary_language": "Goose (aardappel/goose)",
+  "fallback_language": "C++",
+  "goose_release": "v2026.3",
+  "compiler_source": "https://github.com/aardappel/goose/releases/tag/v2026.3",
+  "assets": [
+    {
+      "name": "goose-v2026.3-linux-x64.tar.gz",
+      "url": "https://github.com/aardappel/goose/releases/download/v2026.3/goose-v2026.3-linux-x64.tar.gz",
+      "sha256": "06ac30284338269d3996d457412bf4f2b47c1f9a5601de65b6317187fe78d5c9",
+      "executed_for_scaffold_check": true
+    },
+    {
+      "name": "goose-v2026.3-macos-arm64.tar.gz",
+      "url": "https://github.com/aardappel/goose/releases/download/v2026.3/goose-v2026.3-macos-arm64.tar.gz",
+      "sha256": "2ffaaf46b3edde27aed03fcd9ebe73e9b6639cac30d8a6915f7dc00795b7aedf",
+      "executed_for_scaffold_check": false
+    },
+    {
+      "name": "goose-v2026.3-macos-x64.tar.gz",
+      "url": "https://github.com/aardappel/goose/releases/download/v2026.3/goose-v2026.3-macos-x64.tar.gz",
+      "sha256": "3c7f2895f3dcab5f39ee52808446b00688b975620d1d27e23694dd22b82abfe7",
+      "executed_for_scaffold_check": false
+    },
+    {
+      "name": "goose-v2026.3-windows-x64.zip",
+      "url": "https://github.com/aardappel/goose/releases/download/v2026.3/goose-v2026.3-windows-x64.zip",
+      "sha256": "e30cfa398c0362cef4b8f311cf5496743920b6d3a6c4a6d818fc47ee1e56be7d",
+      "executed_for_scaffold_check": false
+    }
+  ],
+  "native_cxx_standard": "C++20",
+  "dependency_status": "No vendored dependencies. The Meta adapter shells the system curl binary over TLS; queue control, QUIC and RaptorQ remain gated extensions.",
+  "verified_scope": "macOS arm64 full gate suite green (sim suites, native syntax, manual virtual-router and fail-closed Meta probes); Linux x86-64 scaffold syntax verified at import."
+}

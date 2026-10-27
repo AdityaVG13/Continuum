@@ -1,0 +1,5 @@
+// Continuum native transport for this test root (see src/main.build).
+c_sources = ["../native/goose_bridge.c", "../native/router_web.cpp",
+             "../native/meta_web.cpp"];
+c_libs_macos = ["c++"];
+c_libs_linux = ["stdc++"];

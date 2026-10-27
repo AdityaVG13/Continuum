@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "artifact_status": "design_defaults_unmeasured",
+  "mode": "sim",
+  "controller_authority": "meta_tool_calls_only",
+  "scope_id": "lab-uplink",
+  "path_id": "owned-lab-path",
+  "telemetry": {
+    "window_ms": 1000,
+    "max_action_observation_age_ms": 15000,
+    "min_baseline_samples": 20,
+    "min_corroborating_windows": 3,
+    "require_current_window_consistency_at_admission": true
+  },
+  "actuation": {
+    "enabled": false,
+    "profile_catalog_source": "operator_calibrated_before_live_run",
+    "max_lease_ms": 60000,
+    "max_renewals_per_incident": 0,
+    "min_dwell_ms": 10000,
+    "verify_after_ms": 5000,
+    "requires_independent_watchdog": true,
+    "requires_readback": true,
+    "max_profile_changes_per_incident": 2,
+    "restoration_exempt_from_change_budget_and_cooldown": true,
+    "restore_requires_fresh_observation": false
+  },
+  "profiles": [
+    {
+      "profile_id": "balanced-calibrated",
+      "label": "Balanced queue control; rate supplied by lab calibration",
+      "egress_kbit_per_s": null,
+      "max_lease_ms": 30000
+    },
+    {
+      "profile_id": "interactive-calibrated",
+      "label": "Interactive step protection; rate supplied by lab calibration",
+      "egress_kbit_per_s": null,
+      "max_lease_ms": 30000
+    }
+  ],
+  "extensions": {
+    "raptorq": false,
+    "local_inference": false,
+    "retrospective_review": false,
+    "multipath": false
+  },
+  "live_enable_gate": "Exact rates, scope ownership, rollback, real Meta round trip and negative controls must be verified during implementation."
+}

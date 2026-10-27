@@ -1,0 +1,7 @@
+.build/
+.env
+*.key
+*.pem
+.DS_Store
+run-artifacts/
+AGENTS.md

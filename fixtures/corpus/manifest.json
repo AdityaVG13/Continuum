@@ -1,0 +1,31 @@
+{
+  "artifact_status": "authored_synthetic_corpus",
+  "release_revision": "rc2-2026-10-26",
+  "documents": [
+    {
+      "evidence_id": "ci-summary:v1",
+      "path": "ci-summary.md",
+      "sha256": "cbe917c76704600e798c08a47be04c4ef6b517bd1c217eb6d244b6d262d7219d"
+    },
+    {
+      "evidence_id": "release-manifest:v1",
+      "path": "release-manifest.md",
+      "sha256": "dd3de6331e698fe8f1916e2bae7beb9f741b22b5a50cbf827e08519bf7262869"
+    },
+    {
+      "evidence_id": "rollout-policy:v1",
+      "path": "rollout-policy.md",
+      "sha256": "039f38e761e9c72e7d2728e4e5f0059e5ebf3b8fc2eaf8df09e43b216e24498f"
+    },
+    {
+      "evidence_id": "security-review:v1",
+      "path": "security-review.md",
+      "sha256": "37260f7d357c8fae8ee20cd4e295731ee320ee82251942b776635a7ac2986389"
+    },
+    {
+      "evidence_id": "support-readiness:v1",
+      "path": "support-readiness.md",
+      "sha256": "c3b39c0b14d153ccb95a0557006b4a60a84bb56f9df91c8f2f64bee2bb8d33b6"
+    }
+  ]
+}
