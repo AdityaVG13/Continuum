@@ -89,9 +89,10 @@ fn meta_exchange(config: ModelConfig, request_id: const u8[:],
     if n <= 0 || n > env.len {
         return meta_failed("meta transport returned no envelope");
     }
+    let envelope = env[..n];
     var doc: json::Node[>..] = [];
     var decoded: u8[>..] = [];
-    let root, err = json::parse(env[..n], doc, decoded);
+    let root, err = json::parse(envelope, doc, decoded);
     if !root {
         return meta_failed("meta envelope is not JSON");
     }
@@ -100,7 +101,7 @@ fn meta_exchange(config: ModelConfig, request_id: const u8[:],
         return meta_failed("meta envelope lacks status");
     }
     if status == 200 {
-        let raw, has_raw = find_raw_value(env[..n], "body");
+        let raw, has_raw = find_raw_value(envelope, "body");
         if !has_raw {
             return meta_failed("meta envelope lacks body");
         }

@@ -1,7 +1,8 @@
-// Item 6 transport check (C++): drives native/router_web.cpp against a
-// live lab/router_server.py. The server runs separately on the lab host;
-// this binary assumes it at host:port with ROUTER_PASSWORD in env.
-// Build on the lab host with g++ -std=c++20 and the repo native files.
+// Item 6 transport check (C++): drives native/router_web.cpp against
+// the C++ virtual router (tests/router_double.cpp), which
+// `make transport-check` spawns itself; this binary assumes it at
+// host:port with ROUTER_PASSWORD in env.
+// Build with `make transport-check` (C++20, repo native files).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

@@ -73,6 +73,7 @@ fn no_unknown(args: json::Node?, known: const u8[:][:]) -> bool {
         for k in known {
             if c.key == k {
                 seen = true;
+                break;
             }
         }
         if !seen {
@@ -180,67 +181,241 @@ fn validate_apply_call(text: const u8[:]) -> ValidCall {
     if tool != "apply_profile" {
         return bad("not an apply_profile call");
     }
-    let known: const u8[:][10] = ["request_id", "scope_id", "path_id",
-        "profile_id", "observation_id", "task_revision", "route_epoch",
-        "config_revision", "lease_ms", "rationale"];
-    if !no_unknown(args, known) {
-        return bad("unknown argument present");
+    // Single-pass args dispatch (H2): one walk over the args list captures
+    // all ten fields and rejects unknown keys (empty keys, e.g. array
+    // elements, match nothing and reject, exactly like no_unknown). The
+    // per-field checks below run in the original order with the original
+    // literals, so reason codes are byte-identical. First occurrence wins,
+    // matching json::member's first-match semantics on duplicate keys.
+    // Oversized values are never copied into the fixed holders; the
+    // validity checks below still see them as out-of-bound, same reason.
+    var req = ActionRequest {};
+    var has_request_id = false;
+    var request_id_is_str = false;
+    var has_scope_id = false;
+    var scope_id_is_str = false;
+    var has_path_id = false;
+    var path_id_is_str = false;
+    var has_profile_id = false;
+    var profile_id_is_str = false;
+    var has_observation_id = false;
+    var observation_id_is_str = false;
+    var has_task_revision = false;
+    var task_revision_is_int = false;
+    var has_route_epoch = false;
+    var route_epoch_is_int = false;
+    var has_config_revision = false;
+    var config_revision_is_int = false;
+    var has_lease_ms = false;
+    var lease_ms_is_int = false;
+    var has_rationale = false;
+    var rationale_is_str = false;
+    var rationale_len: i64 = 0;
+    var c = args.first;
+    while c {
+        if c.key == "request_id" {
+            if !has_request_id {
+                has_request_id = true;
+                let s, is_str = json::as_string(c);
+                request_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.request_id = s;
+                }
+            }
+        } else if c.key == "scope_id" {
+            if !has_scope_id {
+                has_scope_id = true;
+                let s, is_str = json::as_string(c);
+                scope_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.scope_id = s;
+                }
+            }
+        } else if c.key == "path_id" {
+            if !has_path_id {
+                has_path_id = true;
+                let s, is_str = json::as_string(c);
+                path_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.path_id = s;
+                }
+            }
+        } else if c.key == "profile_id" {
+            if !has_profile_id {
+                has_profile_id = true;
+                let s, is_str = json::as_string(c);
+                profile_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.profile_id = s;
+                }
+            }
+        } else if c.key == "observation_id" {
+            if !has_observation_id {
+                has_observation_id = true;
+                let s, is_str = json::as_string(c);
+                observation_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.observation_id = s;
+                }
+            }
+        } else if c.key == "task_revision" {
+            if !has_task_revision {
+                has_task_revision = true;
+                let v, is_int = json::as_i64(c);
+                task_revision_is_int = is_int;
+                if is_int {
+                    req.task_revision = v;
+                }
+            }
+        } else if c.key == "route_epoch" {
+            if !has_route_epoch {
+                has_route_epoch = true;
+                let v, is_int = json::as_i64(c);
+                route_epoch_is_int = is_int;
+                if is_int {
+                    req.route_epoch = v;
+                }
+            }
+        } else if c.key == "config_revision" {
+            if !has_config_revision {
+                has_config_revision = true;
+                let v, is_int = json::as_i64(c);
+                config_revision_is_int = is_int;
+                if is_int {
+                    req.config_revision = v;
+                }
+            }
+        } else if c.key == "lease_ms" {
+            if !has_lease_ms {
+                has_lease_ms = true;
+                let v, is_int = json::as_i64(c);
+                lease_ms_is_int = is_int;
+                if is_int {
+                    req.lease_ms = v;
+                }
+            }
+        } else if c.key == "rationale" {
+            if !has_rationale {
+                has_rationale = true;
+                let s, is_str = json::as_string(c);
+                rationale_is_str = is_str;
+                if is_str {
+                    rationale_len = s.len;
+                    if s.len <= 1024 {
+                        req.rationale = s;
+                    }
+                }
+            }
+        } else {
+            return bad("unknown argument present");
+        }
+        c .= c.next;
     }
-    let request_id, r1, ok1 = get_id(args, "request_id", 64);
-    if !ok1 {
-        return bad(r1);
+    if !has_request_id {
+        return bad("missing required id");
     }
-    let scope_id, r2, ok2 = get_id(args, "scope_id", 64);
-    if !ok2 {
-        return bad(r2);
+    if !request_id_is_str {
+        return bad("id is not a string");
     }
-    let path_id, r3, ok3 = get_id(args, "path_id", 64);
-    if !ok3 {
-        return bad(r3);
+    if !valid_id(req.request_id, 64) {
+        return bad("id outside catalogue pattern or length");
     }
-    let profile_id, r4, ok4 = get_id(args, "profile_id", 64);
-    if !ok4 {
-        return bad(r4);
+    if !has_scope_id {
+        return bad("missing required id");
     }
-    let observation_id, r5, ok5 = get_id(args, "observation_id", 64);
-    if !ok5 {
-        return bad(r5);
+    if !scope_id_is_str {
+        return bad("id is not a string");
     }
-    let task_revision, r6, ok6 = get_int(args, "task_revision", 0, MAX_REVISIONS);
-    if !ok6 {
-        return bad(r6);
+    if !valid_id(req.scope_id, 64) {
+        return bad("id outside catalogue pattern or length");
     }
-    let route_epoch, r7, ok7 = get_int(args, "route_epoch", 0, MAX_REVISIONS);
-    if !ok7 {
-        return bad(r7);
+    if !has_path_id {
+        return bad("missing required id");
     }
-    let config_revision, r8, ok8 = get_int(args, "config_revision", 0, MAX_REVISIONS);
-    if !ok8 {
-        return bad(r8);
+    if !path_id_is_str {
+        return bad("id is not a string");
     }
-    let lease_ms, r9, ok9 = get_int(args, "lease_ms", MIN_APPLY_LEASE_MS, MAX_APPLY_LEASE_MS);
-    if !ok9 {
-        return bad(r9);
+    if !valid_id(req.path_id, 64) {
+        return bad("id outside catalogue pattern or length");
     }
-    let rationale, r10, ok10 = get_text(args, "rationale", MAX_RATIONALE_LEN);
-    if !ok10 {
-        return bad(r10);
+    if !has_profile_id {
+        return bad("missing required id");
+    }
+    if !profile_id_is_str {
+        return bad("id is not a string");
+    }
+    if !valid_id(req.profile_id, 64) {
+        return bad("id outside catalogue pattern or length");
+    }
+    if !has_observation_id {
+        return bad("missing required id");
+    }
+    if !observation_id_is_str {
+        return bad("id is not a string");
+    }
+    if !valid_id(req.observation_id, 64) {
+        return bad("id outside catalogue pattern or length");
+    }
+    if !has_task_revision {
+        return bad("missing required integer");
+    }
+    if !task_revision_is_int {
+        return bad("integer is not an integer");
+    }
+    if req.task_revision < 0 || req.task_revision > MAX_REVISIONS {
+        return bad("integer outside permitted range");
+    }
+    if !has_route_epoch {
+        return bad("missing required integer");
+    }
+    if !route_epoch_is_int {
+        return bad("integer is not an integer");
+    }
+    if req.route_epoch < 0 || req.route_epoch > MAX_REVISIONS {
+        return bad("integer outside permitted range");
+    }
+    if !has_config_revision {
+        return bad("missing required integer");
+    }
+    if !config_revision_is_int {
+        return bad("integer is not an integer");
+    }
+    if req.config_revision < 0 || req.config_revision > MAX_REVISIONS {
+        return bad("integer outside permitted range");
+    }
+    if !has_lease_ms {
+        return bad("missing required integer");
+    }
+    if !lease_ms_is_int {
+        return bad("integer is not an integer");
+    }
+    if req.lease_ms < MIN_APPLY_LEASE_MS || req.lease_ms > MAX_APPLY_LEASE_MS {
+        return bad("integer outside permitted range");
+    }
+    if !has_rationale {
+        return bad("missing required text");
+    }
+    if !rationale_is_str {
+        return bad("text is not a string");
+    }
+    if rationale_len > MAX_RATIONALE_LEN || !valid_text(req.rationale, MAX_RATIONALE_LEN) {
+        return bad("text over length bound");
     }
     return ValidCall {
         ok: true,
         request: ActionRequest {
-            request_id: request_id,
+            request_id: req.request_id,
             kind: ActionKind.ApplyProfile,
-            profile_id: profile_id,
-            scope_id: scope_id,
-            path_id: path_id,
-            observation_id: observation_id,
-            task_revision: task_revision,
-            config_revision: config_revision,
-            route_epoch: route_epoch,
-            lease_ms: lease_ms,
-            lease_id: request_id,
-            rationale: rationale,
+            profile_id: req.profile_id,
+            scope_id: req.scope_id,
+            path_id: req.path_id,
+            observation_id: req.observation_id,
+            task_revision: req.task_revision,
+            config_revision: req.config_revision,
+            route_epoch: req.route_epoch,
+            lease_ms: req.lease_ms,
+            lease_id: req.request_id,
+            rationale: req.rationale,
         },
     };
 }
@@ -267,45 +442,156 @@ fn validate_restore_call(text: const u8[:]) -> ValidCall {
     if tool != "restore_profile" {
         return bad("not a restore_profile call");
     }
-    let known: const u8[:][6] = ["request_id", "scope_id", "lease_id",
-        "expected_revision", "observation_id", "rationale"];
-    if !no_unknown(args, known) {
-        return bad("unknown argument present");
+    // Single-pass args dispatch (H5): one walk over the args list captures
+    // all six fields and rejects unknown keys (empty keys, e.g. array
+    // elements, match nothing and reject, exactly like no_unknown). The
+    // per-field checks below run in the original order with the original
+    // literals, so reason codes are byte-identical. First occurrence wins,
+    // matching json::member's first-match semantics on duplicate keys.
+    // Oversized values are never copied into the fixed holders; the
+    // validity checks below still see them as out-of-bound, same reason.
+    var req = ActionRequest {};
+    var has_request_id = false;
+    var request_id_is_str = false;
+    var has_scope_id = false;
+    var scope_id_is_str = false;
+    var has_lease_id = false;
+    var lease_id_is_str = false;
+    var has_expected_revision = false;
+    var expected_revision_is_int = false;
+    var has_observation_id = false;
+    var observation_id_is_str = false;
+    var has_rationale = false;
+    var rationale_is_str = false;
+    var rationale_len: i64 = 0;
+    var c = args.first;
+    while c {
+        if c.key == "request_id" {
+            if !has_request_id {
+                has_request_id = true;
+                let s, is_str = json::as_string(c);
+                request_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.request_id = s;
+                }
+            }
+        } else if c.key == "scope_id" {
+            if !has_scope_id {
+                has_scope_id = true;
+                let s, is_str = json::as_string(c);
+                scope_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.scope_id = s;
+                }
+            }
+        } else if c.key == "lease_id" {
+            if !has_lease_id {
+                has_lease_id = true;
+                let s, is_str = json::as_string(c);
+                lease_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.lease_id = s;
+                }
+            }
+        } else if c.key == "expected_revision" {
+            if !has_expected_revision {
+                has_expected_revision = true;
+                let v, is_int = json::as_i64(c);
+                expected_revision_is_int = is_int;
+                if is_int {
+                    req.expected_revision = v;
+                }
+            }
+        } else if c.key == "observation_id" {
+            if !has_observation_id {
+                has_observation_id = true;
+                let s, is_str = json::as_string(c);
+                observation_id_is_str = is_str;
+                if is_str && s.len <= 64 {
+                    req.observation_id = s;
+                }
+            }
+        } else if c.key == "rationale" {
+            if !has_rationale {
+                has_rationale = true;
+                let s, is_str = json::as_string(c);
+                rationale_is_str = is_str;
+                if is_str {
+                    rationale_len = s.len;
+                    if s.len <= 1024 {
+                        req.rationale = s;
+                    }
+                }
+            }
+        } else {
+            return bad("unknown argument present");
+        }
+        c .= c.next;
     }
-    let request_id, r1, ok1 = get_id(args, "request_id", 64);
-    if !ok1 {
-        return bad(r1);
+    if !has_request_id {
+        return bad("missing required id");
     }
-    let scope_id, r2, ok2 = get_id(args, "scope_id", 64);
-    if !ok2 {
-        return bad(r2);
+    if !request_id_is_str {
+        return bad("id is not a string");
     }
-    let lease_id, r3, ok3 = get_id(args, "lease_id", 64);
-    if !ok3 {
-        return bad(r3);
+    if !valid_id(req.request_id, 64) {
+        return bad("id outside catalogue pattern or length");
     }
-    let expected_revision, r4, ok4 = get_int(args, "expected_revision", 0, MAX_REVISIONS);
-    if !ok4 {
-        return bad(r4);
+    if !has_scope_id {
+        return bad("missing required id");
     }
-    let observation_id, r5, ok5 = get_id(args, "observation_id", 64);
-    if !ok5 {
-        return bad(r5);
+    if !scope_id_is_str {
+        return bad("id is not a string");
     }
-    let rationale, r6, ok6 = get_text(args, "rationale", MAX_RATIONALE_LEN);
-    if !ok6 {
-        return bad(r6);
+    if !valid_id(req.scope_id, 64) {
+        return bad("id outside catalogue pattern or length");
+    }
+    if !has_lease_id {
+        return bad("missing required id");
+    }
+    if !lease_id_is_str {
+        return bad("id is not a string");
+    }
+    if !valid_id(req.lease_id, 64) {
+        return bad("id outside catalogue pattern or length");
+    }
+    if !has_expected_revision {
+        return bad("missing required integer");
+    }
+    if !expected_revision_is_int {
+        return bad("integer is not an integer");
+    }
+    if req.expected_revision < 0 || req.expected_revision > MAX_REVISIONS {
+        return bad("integer outside permitted range");
+    }
+    if !has_observation_id {
+        return bad("missing required id");
+    }
+    if !observation_id_is_str {
+        return bad("id is not a string");
+    }
+    if !valid_id(req.observation_id, 64) {
+        return bad("id outside catalogue pattern or length");
+    }
+    if !has_rationale {
+        return bad("missing required text");
+    }
+    if !rationale_is_str {
+        return bad("text is not a string");
+    }
+    if rationale_len > MAX_RATIONALE_LEN || !valid_text(req.rationale, MAX_RATIONALE_LEN) {
+        return bad("text over length bound");
     }
     return ValidCall {
         ok: true,
         request: ActionRequest {
-            request_id: request_id,
+            request_id: req.request_id,
             kind: ActionKind.RestoreProfile,
-            scope_id: scope_id,
-            observation_id: observation_id,
-            expected_revision: expected_revision,
-            lease_id: lease_id,
-            rationale: rationale,
+            scope_id: req.scope_id,
+            observation_id: req.observation_id,
+            expected_revision: req.expected_revision,
+            lease_id: req.lease_id,
+            rationale: req.rationale,
         },
     };
 }

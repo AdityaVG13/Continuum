@@ -1,7 +1,7 @@
 // Continuum WebApi transport (item 6): real ct_profile_* over HTTP.
 //
-// Talks to a stock-like router admin API (see lab/router_server.py for the
-// test double): login with a password that ONLY comes from the
+// Talks to a stock-like router admin API (see tests/router_double.cpp
+// for the test double): login with a password that ONLY comes from the
 // ROUTER_PASSWORD environment variable, set the QoS knob, read it back,
 // restore the baseline, reconcile revision. No TLS here: the lab link is a
 // private test network; HTTPS with pinned firmware certificates is the

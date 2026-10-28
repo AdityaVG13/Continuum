@@ -1,12 +1,10 @@
-// Manual end-to-end (item 6): the full Goose loop against the virtual
-// router over real HTTP. NOT part of `make test`: it needs a live
-// lab/router_server.py and ROUTER_PASSWORD in the environment.
+// End-to-end (item 6): the full Goose loop against the virtual router
+// over real HTTP. NOT part of `make test`: it talks to the C++ double
+// (tests/router_double.cpp), which `make web-e2e-run` spawns itself
+// with a test-only password. ROUTER_HOST/ROUTER_PORT/ROUTER_PASSWORD
+// can still point the binary at any other double instance.
 //
-// Build and run from the repo root (the tests/router_web_e2e.build sidecar
-// links the native objects automatically):
-//   make web-e2e
-//   ROUTER_HOST=<lab-host> ROUTER_PORT=18081 \
-//       ROUTER_PASSWORD='<lab password>' make web-e2e-run
+//   make web-e2e-run        # self-contained
 //
 // What it proves: an envelope validated by tooljson, admitted by the
 // guardian, applied through the C++ transport to a router that bumps its

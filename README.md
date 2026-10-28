@@ -44,17 +44,24 @@ make check status sim daemon test native-check
 ```
 
 What that proves: the sources typecheck, the status ledger builds, the
-sim and daemon transcripts are deterministic, the four contract suites
+sim and daemon transcripts are deterministic, the eight contract suites
 pass, and the C++ sources compile clean. None of it touches a network.
+
+The virtual-router lanes run against the C++ double on localhost and
+are self-contained:
+
+```sh
+make transport-check web-e2e-run asus-check leap-e2e
+```
 
 Two manual probes need the outside world and stay out of `make test`:
 
 ```sh
-# Virtual router over HTTP (lab double + password in the environment)
-ROUTER_HOST=<lab> ROUTER_PORT=18081 ROUTER_PASSWORD='<pw>' make web-e2e-run
-
 # One bounded Meta round trip, or a fail-closed check with no key
 MODEL_API_KEY='<key>' META_CONTROLLER_MODEL='muse-wonder-1.0' make meta-live
+
+# Leap ceremony against real hardware (dry run unless LEAP_EXECUTE=1)
+ROUTER_HOST=<router> SSID_STEM=<stem> make leap
 ```
 
 The Meta probe reads the key from the environment at submit time, never
@@ -70,11 +77,10 @@ logs it, and refuses to run without one.
 | `docs/DEMO_RUNBOOK.md` | Three-minute stage sequence and required live proof. |
 | `docs/EVALUATION.md`, `PITCH.md` | Comparisons, metrics proposal, positioning. |
 | `prompts/`, `schemas/`, `config/`, `fixtures/` | Controller/workload prompts, wire contracts, example configs, synthetic fixtures. |
-| `src/` | Goose implementation: sim, guardian, actuator, tool binding, Meta provider. |
+| `src/` | Goose implementation: sim, guardian, actuator, tool binding, Meta provider, onboarding planner + leap ceremony. |
 | `src/main.build`, `tests/*.build` | Toolchain sidecars linking the native sources into each binary. |
-| `native/` | C ABI (`continuum_native.h`), router HTTP backend, Meta HTTPS adapter, C++ fallback stubs. |
-| `lab/` | Virtual-router double, contract checker, load generators, measured curves in `lab/results/`. |
-| `tests/` | Contract suites plus the two manual probes. |
+| `native/` | C ABI (`continuum_native.h`), router HTTP backend, Meta HTTPS adapter, ASUS onboarding adapter, macOS keychain/Wi-Fi host backend, C++ fallback stubs. |
+| `tests/` | Contract suites, the C++ virtual-router double (`router_double.cpp`), native harnesses, and the manual probes. |
 | `verification/` | Dated gate log and artifact summary. |
 | `tools/render_spec.py` | Optional PDF publishing utility (documentation tooling only). |
 

@@ -4,4 +4,6 @@
 *.pem
 .DS_Store
 run-artifacts/
+internal/
+lab/
 AGENTS.md

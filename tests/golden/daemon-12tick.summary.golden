@@ -1,0 +1,10 @@
+ticks=12
+observations=12
+applies=1
+restores=1
+model_calls=0
+escalations=0
+tokens_estimated=0
+status=Completed
+message=daemon completed
+profile=baseline-fifo

@@ -24,14 +24,16 @@ fn journal_disable_file() {
 fn append_event(event: Event) -> Outcome {
     var stamped = event;
     stamped.sequence = journal.len;
-    journal.push(stamped);
     if journal_to_file {
         let line = str(stamped.sequence, "|", stamped.timestamp_ms, "|",
             stamped.event_type, "|", stamped.run_id, "|", stamped.payload_json, "\n");
         if !append_file(journal_path, line) {
+            // Memory stays untouched: file order and memory order cannot
+            // disagree, and the sequence number is reused by the next beat.
             return Outcome { status: Status.Failed, message: "journal file append failed" };
         }
     }
+    journal.push(stamped);
     return Outcome { status: Status.Completed, message: "journaled" };
 }
 

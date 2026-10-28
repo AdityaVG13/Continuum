@@ -15,6 +15,7 @@ This file connects the specification to concrete source modules. It is a build h
 | `src/task_runner.goose` | Meta task/validator/checkpoint signatures plus workload-result validation | Real Meta workload plus independent acceptance of its output | Meaningful model output passes a pinned validator; invalid or missing evidence cannot advance progress |
 | `src/events.goose` | Event record and `append_event` with file sink | Redacted view feed | Model-call provenance, admitted action, queue readback, observed recovery and validation appear as distinct events |
 | `src/transport.goose` | Optional exact-object transfer contract | Owned-link reliable baseline, then bounded RaptorQ experiment | Exact authenticated object accepted before deadline under a matched wire budget; no unsupported claims about Meta's HTTPS leg |
+| `src/onboarding.goose` | Control-channel planner: discovered paths to strategy (`SurvivingPath` / staged `SameLinkLeap` / `NoPath`), staged-credential admissibility, post-leap outcome classification | OS path discovery and rejoin execution behind the native boundary; live Class B prototype per `docs/ONBOARDING_AND_STEWARDSHIP.md` section 7 | Scenario catalogue green in `tests/foundation.goose`; live leap rejoins and verifies, or the miss is recorded |
 | `native/continuum_native.h` | C ABI with router and Meta backends | SSH/tc and object-transfer adapters | ABI layout, lifetime, cancellation and error mapping proven on target platform |
 | `native/continuum_native_stub.cpp` | Explicit `CT_NOT_IMPLEMENTED` functions | Replace one adapter at a time after its gate | Adapter-specific integration tests; stubs cannot silently return success |
 | `native/fallback_main.cpp` | C++ status entrypoint | C++ host only if Goose integration gate requires it | Same model/tool contracts and workload acceptance criteria as Goose |
@@ -73,7 +74,7 @@ The header is bound into the Goose executables through `extern` declarations and
 
 ## Build surface
 
-The build surface exposes type/syntax checks, the status ledger, deterministic sim/daemon transcripts, contract suites, native syntax checks, and two manual probes:
+The build surface exposes type/syntax checks, the status ledger, deterministic sim/daemon transcripts, contract suites, native syntax checks, self-contained end-to-end lanes against the C++ virtual router (`tests/router_double.cpp`), and two manual probes:
 
 ```sh
 make check GOOSE=/absolute/path/to/goose
@@ -82,8 +83,9 @@ make test GOOSE=/absolute/path/to/goose
 make sim daemon GOOSE=/absolute/path/to/goose
 make native-check
 make cpp-status
-make web-e2e-run   # needs lab/router_server.py + ROUTER_PASSWORD
+make transport-check web-e2e-run asus-check leap-e2e   # C++ double, self-contained
 make meta-live     # needs MODEL_API_KEY for the live leg
+make leap          # real hardware ceremony; dry unless LEAP_EXECUTE=1
 ```
 
-`make status` builds a small Goose executable reporting each module's implementation state. `make cpp-status` does the same for the optional C++ fallback. The sim, daemon and contract suites touch no network. The two manual probes are the only lanes that leave the machine, and each states its requirements up front.
+`make status` builds a small Goose executable reporting each module's implementation state. `make cpp-status` does the same for the optional C++ fallback. The sim, daemon and contract suites touch no network; the double lanes touch only localhost. The two manual probes (`meta-live`, `leap`) are the only lanes that leave the machine, and each states its requirements up front.

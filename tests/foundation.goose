@@ -1,5 +1,6 @@
 // Foundation contract tests: scenarios, decision table, router-profile
-// contract, durable lease/journal persistence, crash recovery, daemon loop.
+// contract, onboarding control-channel planner, durable lease/journal
+// persistence, crash recovery, daemon loop.
 // Failure-first: written to FAIL until the foundation modules landed; now guards them.
 // Run: goose run tests/foundation.goose   (exit 0 = all green)
 import lib from "../src";
@@ -102,6 +103,109 @@ fn main() {
     continuum::router_reboot();
     check(!continuum::router_set_knob("qos", "off"), "reboot drops the session");
     check(continuum::router_profile().config_revision > rev_before, "reboot bumps revision");
+
+    // --- onboarding: the control-channel planner (Delegate, C19/C20) ---
+    // Discovery produces whatever paths actually reach the router; the
+    // planner must handle a wired bench, an AP behind another network, a
+    // second bound device, and the common case -- this machine's only path
+    // rides the very Wi-Fi setup is about to rename. No strategy may
+    // mutate until the admin credential is staged; a same-link leap
+    // additionally needs the new SSID/PSK staged before the write.
+    let wired = continuum::ControlPath {
+        path_id: "wired0", kind: continuum::PathKind.Wired, interface_id: "en7",
+        bind_addr: "192.168.50.50", endpoint: "192.168.50.1",
+        rides_target_wifi: false, reachable: true,
+    };
+    let wifi_same = continuum::ControlPath {
+        path_id: "wifi0", kind: continuum::PathKind.Wifi, interface_id: "en0",
+        bind_addr: "192.168.50.173", endpoint: "192.168.50.1",
+        rides_target_wifi: true, reachable: true,
+    };
+    var dead_wired = wired;
+    dead_wired.reachable = false;
+    let staged_full = continuum::StagedSetup {
+        staged: true, old_ssid: "ASUS_20_5G_Gaming", new_ssid: "ContinuumLab",
+        psk_ref: "continuum-lab-psk", admin_ref: "continuum-lab-admin",
+    };
+    var staged_admin_only = staged_full;
+    staged_admin_only.new_ssid = "";
+    staged_admin_only.psk_ref = "";
+    let unstaged = continuum::StagedSetup {};
+
+    let no_paths = continuum::plan_leap(continuum::ControlPaths {}, staged_full);
+    check(no_paths.strategy == continuum::LeapStrategy.NoPath && !no_paths.admissible,
+        "no discovered path is inadmissible");
+    let dead_only = continuum::plan_leap(
+        continuum::ControlPaths { items: [dead_wired] }, staged_full);
+    check(dead_only.strategy == continuum::LeapStrategy.NoPath && !dead_only.admissible,
+        "an unreachable path is not a control channel");
+
+    let leap = continuum::plan_leap(
+        continuum::ControlPaths { items: [wifi_same] }, staged_full);
+    check(leap.strategy == continuum::LeapStrategy.SameLinkLeap && leap.admissible,
+        "wifi-only with full staging may leap");
+    check(leap.expects_disconnect && leap.rejoin_ssid == "ContinuumLab"
+            && leap.fallback_ssid == "ASUS_20_5G_Gaming",
+        "leap expects the drop and knows both SSIDs");
+    check(leap.control_path_id == "wifi0" && leap.bind_addr == "192.168.50.173",
+        "leap carries the interface binding for the backend");
+    let leap_unstaged = continuum::plan_leap(
+        continuum::ControlPaths { items: [wifi_same] }, unstaged);
+    check(leap_unstaged.strategy == continuum::LeapStrategy.SameLinkLeap
+            && !leap_unstaged.admissible && leap_unstaged.requires_staging,
+        "unstaged leap is named but never admissible");
+    let leap_admin_only = continuum::plan_leap(
+        continuum::ControlPaths { items: [wifi_same] }, staged_admin_only);
+    check(!leap_admin_only.admissible,
+        "leap without staged ssid/psk is inadmissible");
+
+    let wired_plan = continuum::plan_leap(
+        continuum::ControlPaths { items: [wired] }, staged_admin_only);
+    check(wired_plan.strategy == continuum::LeapStrategy.SurvivingPath
+            && wired_plan.admissible && !wired_plan.expects_disconnect,
+        "wired path survives the rename and needs only the admin staging");
+    let wired_unstaged = continuum::plan_leap(
+        continuum::ControlPaths { items: [wired] }, unstaged);
+    check(wired_unstaged.strategy == continuum::LeapStrategy.SurvivingPath
+            && !wired_unstaged.admissible,
+        "even a surviving path may not write before the admin credential is staged");
+    let both = continuum::plan_leap(
+        continuum::ControlPaths { items: [wifi_same, wired] }, staged_full);
+    check(both.strategy == continuum::LeapStrategy.SurvivingPath
+            && both.control_path_id == "wired0",
+        "a surviving path outranks a leap in any discovery order");
+    let dead_then_wifi = continuum::plan_leap(
+        continuum::ControlPaths { items: [dead_wired, wifi_same] }, staged_full);
+    check(dead_then_wifi.strategy == continuum::LeapStrategy.SameLinkLeap
+            && dead_then_wifi.admissible,
+        "a dead wired path does not mask a usable leap");
+
+    // After the leap the outcome is a decision table, not improvisation.
+    check(continuum::classify_leap(true, false, true, true)
+            == continuum::LeapOutcome.Verified,
+        "joined new ssid and admin auth verified the leap");
+    check(continuum::classify_leap(true, true, true, true)
+            == continuum::LeapOutcome.Verified,
+        "a verified join wins even while another band still shows the old ssid");
+    check(continuum::classify_leap(true, false, true, false)
+            == continuum::LeapOutcome.AdminAuthFailed,
+        "joined but the staged admin credential is rejected");
+    check(continuum::classify_leap(true, false, false, false)
+            == continuum::LeapOutcome.CredentialMismatch,
+        "new ssid visible but the staged psk does not join it");
+    check(continuum::classify_leap(false, true, false, false)
+            == continuum::LeapOutcome.NotApplied,
+        "old ssid back and no new ssid means setup never applied");
+    check(continuum::classify_leap(false, false, false, false)
+            == continuum::LeapOutcome.Unreachable,
+        "neither ssid visible is unreachable, not a credential verdict");
+    check(!continuum::leap_needs_physical_reset(continuum::LeapOutcome.Verified)
+            && !continuum::leap_needs_physical_reset(continuum::LeapOutcome.NotApplied)
+            && !continuum::leap_needs_physical_reset(continuum::LeapOutcome.Unreachable),
+        "verified, not-applied and unreachable never demand a reset");
+    check(continuum::leap_needs_physical_reset(continuum::LeapOutcome.CredentialMismatch)
+            && continuum::leap_needs_physical_reset(continuum::LeapOutcome.AdminAuthFailed),
+        "staged-credential divergence on a class B device is the physical-reset case");
 
     // --- persistence + crash recovery ---
     continuum::sim_reset(5);

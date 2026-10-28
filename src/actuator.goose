@@ -67,6 +67,11 @@ fn apply_profile(request: ActionRequest, admission: Admission) -> ActionReceipt 
         }
     }
     if !sim_apply(request.profile_id) {
+        if store_enabled {
+            // The intent was never realized: retract it so a later recovery
+            // cannot rehydrate a lease that was never created.
+            lease_clear(lease_store_path);
+        }
         return ActionReceipt {
             outcome: Outcome { status: Status.Failed, message: "sim rejected the profile" },
         };

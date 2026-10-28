@@ -3,10 +3,12 @@ namespace continuum;
 
 // Deterministic admission (M04): the policy (or Meta) chooses, this code
 // disposes. Fail-closed: every check below must pass or nothing mutates.
-// A restore of an owned active lease is still subject to ownership, scope,
-// revision and freshness checks; it is never blocked merely because the
-// observation is old or the apply budget is spent (that budget governs new
-// profile changes, per BUILD_PLAN C08).
+// Restoration of an owned active lease is exempt from the observation-age
+// and route-epoch gates (spec 09: no fresh network evidence required); it
+// still needs ownership, scope, revision, lease-bound and duplicate checks
+// here plus the actuator's lease-identity match. It is never blocked merely
+// because the observation is old or the apply budget is spent (that budget
+// governs new profile changes, per BUILD_PLAN C08).
 const MAX_OBSERVATION_AGE_MS: i64 = 5000;
 const MAX_APPLIES_PER_MINUTE: i64 = 8;
 
@@ -41,12 +43,19 @@ fn admit_action(request: ActionRequest, observation: Observation,
     if !observation.metrics_known || observation.observation_id == "" {
         return reject("no usable evidence behind this request");
     }
-    if request.route_epoch != observation.route_epoch {
+    if request.route_epoch != observation.route_epoch
+            && request.kind != ActionKind.RestoreProfile {
         return reject("route epoch changed since the observation");
     }
-    let age = now_ms - observation.observed_at_ms;
-    if age < 0 || age > MAX_OBSERVATION_AGE_MS {
-        return reject("evidence is stale or future-dated");
+    if request.kind != ActionKind.RestoreProfile {
+        // New profile changes need fresh evidence. Restoration of an owned
+        // active lease is exempt from the observation-age gate (spec 09):
+        // it is checked on ownership, revision and restorable state below
+        // and at the actuator's lease match.
+        let age = now_ms - observation.observed_at_ms;
+        if age < 0 || age > MAX_OBSERVATION_AGE_MS {
+            return reject("evidence is stale or future-dated");
+        }
     }
     if request.lease_ms <= 0 || request.lease_ms > profile.maximum_lease_ms {
         return reject("lease outside the profile's permitted bound");
@@ -58,7 +67,20 @@ fn admit_action(request: ActionRequest, observation: Observation,
         return reject("duplicate or empty request id");
     }
     if seen_ids.len >= 64 {
-        return reject("admission history full; restart rotation");
+        // Bounded history: new profile changes fail closed once the table
+        // is full ("restart rotation"). Restoration of an owned lease must
+        // stay available (spec 09); at-most-once there rests on the
+        // actuator's active-lease match, not on this table, so a restore
+        // is admitted without consuming a history slot.
+        if request.kind != ActionKind.RestoreProfile {
+            return reject("admission history full; restart rotation");
+        }
+        return Admission {
+            outcome: Outcome { status: Status.Completed, message: "admitted" },
+            action_id: request.request_id,
+            admitted: true,
+            authority_token: request.request_id,
+        };
     }
     if request.kind == ActionKind.ApplyProfile {
         if window_start_ms < 0 || now_ms - window_start_ms >= 60000 {

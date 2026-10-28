@@ -39,6 +39,7 @@ fn has_sub(text: const u8[:], sub: const u8[:]) -> bool {
         for j in 0..sub.len {
             if text[i + j] != sub[j] {
                 hit = false;
+                break;
             }
         }
         if hit {

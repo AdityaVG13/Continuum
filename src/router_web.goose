@@ -74,7 +74,7 @@ fn web_request_json(profile_id: const u8[:], rate_mbit: i64,
     return true;
 }
 
-fn parse_receipt(text: u8[:], lease_id: const u8[:]) -> WebResult {
+fn parse_receipt(text: u8[:], lease_id: const u8[:], kind: i64) -> WebResult {
     if text.len <= 0 || text.len > 2048 {
         return bad_web("receipt size outside 1..2048");
     }
@@ -84,9 +84,19 @@ fn parse_receipt(text: u8[:], lease_id: const u8[:]) -> WebResult {
     if !root {
         return bad_web("receipt is not JSON");
     }
-    var ok_key = json::member(root, "applied");
-    if !ok_key {
-        ok_key .= json::member(root, "restored");
+    // The marker must match the issued operation: an apply receipt never
+    // proves a restore and vice versa. kind mirrors web_call (0 = apply,
+    // 1 = restore); any other kind accepts no mutation marker.
+    var ok_key = if kind == 0 { json::member(root, "applied") }
+        else if kind == 1 { json::member(root, "restored") }
+        else { json::member(root, "") };
+    // Neither backend ever emits both markers: a receipt carrying the
+    // other operation's marker is contradictory, not lenient.
+    var other = if kind == 0 { json::member(root, "restored") }
+        else if kind == 1 { json::member(root, "applied") }
+        else { json::member(root, "") };
+    if other {
+        return bad_web("receipt mixes apply and restore markers");
     }
     let done, is_b = json::as_bool(ok_key);
     if !is_b || !done {
@@ -122,7 +132,7 @@ fn web_call(kind: i64, req_text: const u8[:], lease_id: const u8[:]) -> WebResul
     if n <= 0 || n > receipt.len {
         return bad_web("transport returned no receipt");
     }
-    return parse_receipt(receipt[..n], lease_id);
+    return parse_receipt(receipt[..n], lease_id, kind);
 }
 
 fn web_apply(profile_id: const u8[:], rate_mbit: i64, scope_id: const u8[:],
@@ -145,6 +155,39 @@ fn web_restore(scope_id: const u8[:], lease_id: const u8[:], revision: i64,
     return web_call(1, req_text, lease_id);
 }
 
+fn parse_reconcile_receipt(text: u8[:], revision: i64) -> WebResult {
+    if text.len <= 0 || text.len > 2048 {
+        return bad_web("receipt size outside 1..2048");
+    }
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(text, doc, decoded);
+    if !root {
+        return bad_web("receipt is not JSON");
+    }
+    let rev, is_r = json::as_i64(json::member(root, "revision"));
+    if !is_r || rev < 0 {
+        return bad_web("receipt lacks a revision");
+    }
+    let sync, is_s = json::as_bool(json::member(root, "in_sync"));
+    if !is_s {
+        return bad_web("receipt lacks sync state");
+    }
+    // Bind the answer to the question: the receipt echoes the expectation
+    // the request carried, and a true in_sync must agree with both the
+    // reported and the requested revision. Trusting in_sync alone accepts
+    // stale or crossed responses as current truth.
+    let exp, is_e = json::as_i64(json::member(root, "expected_revision"));
+    if !is_e || exp != revision {
+        return bad_web("receipt answers a different expectation");
+    }
+    if sync && rev != revision {
+        return bad_web("receipt claims sync at a moved revision");
+    }
+    return WebResult { ok: sync, revision: rev, verified: true,
+        reason: if sync { "" } else { "router drifted from expected revision" } };
+}
+
 fn web_reconcile(scope_id: const u8[:], lease_id: const u8[:],
         revision: i64, host: const u8[:], port: i64) -> WebResult {
     var req_text: u8[>..] = [];
@@ -161,23 +204,5 @@ fn web_reconcile(scope_id: const u8[:], lease_id: const u8[:],
     if n <= 0 || n > receipt.len {
         return bad_web("transport returned no receipt");
     }
-    if receipt[..n].len <= 0 || receipt[..n].len > 2048 {
-        return bad_web("receipt size outside 1..2048");
-    }
-    var doc: json::Node[>..] = [];
-    var decoded: u8[>..] = [];
-    let root, err = json::parse(receipt[..n], doc, decoded);
-    if !root {
-        return bad_web("receipt is not JSON");
-    }
-    let rev, is_r = json::as_i64(json::member(root, "revision"));
-    if !is_r || rev < 0 {
-        return bad_web("receipt lacks a revision");
-    }
-    let sync, is_s = json::as_bool(json::member(root, "in_sync"));
-    if !is_s {
-        return bad_web("receipt lacks sync state");
-    }
-    return WebResult { ok: sync, revision: rev, verified: true,
-        reason: if sync { "" } else { "router drifted from expected revision" } };
+    return parse_reconcile_receipt(receipt[..n], revision);
 }

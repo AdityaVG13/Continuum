@@ -1,0 +1,12 @@
+// Leap logic root natives: src/leap.goose's externs must link even
+// though this suite only exercises the pure surface. leap_bridge.c
+// (not goose_bridge.c) carries the ASUS + host wrappers; the host
+// backend here is the headless fake over the env vault -- production
+// links native/host_macos.cpp, whose framework flags a .build sidecar
+// cannot express (the Makefile's manual leap recipe passes them).
+c_sources = ["../native/goose_bridge.c", "../native/leap_bridge.c",
+             "../native/router_web.cpp", "../native/meta_web.cpp",
+             "../native/asus_web.cpp", "../native/vault.cpp",
+             "host_fake.cpp"];
+c_libs_macos = ["c++"];
+c_libs_linux = ["stdc++"];

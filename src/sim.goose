@@ -200,7 +200,11 @@ fn sim_load(path: const u8[:]) -> bool {
                 let v, ok = parse_int(val);
                 if ok { sim_world.now_ms = v; found = true; }
             } else if key == "profile" {
-                sim_world.applied_profile_id = val;
+                // Mirror sim_apply: never install a profile the sim will
+                // not honor. Unknown names keep the current profile.
+                if sim_profile_known(val) {
+                    sim_world.applied_profile_id = val;
+                }
             } else if key == "baseline" {
                 let v, ok = parse_flt(val);
                 if ok { sim_world.baseline_rtt_ms = v; }
@@ -211,11 +215,21 @@ fn sim_load(path: const u8[:]) -> bool {
                 let v, ok = parse_int(val);
                 if ok { sim_world.seed = v as! u64; }
             } else if key == "load" {
+                // Mirror sim_set_load: floor negatives, keep super-unity
+                // saturation (that is what the knob is for).
                 let v, ok = parse_flt(val);
-                if ok { sim_world.load_fraction = v; }
+                if ok {
+                    if v < 0.0 { sim_world.load_fraction = 0.0; }
+                    else { sim_world.load_fraction = v; }
+                }
             } else if key == "loss" {
+                // Mirror sim_set_loss: loss lives in [0, 1].
                 let v, ok = parse_flt(val);
-                if ok { sim_world.loss_fraction = v; }
+                if ok {
+                    if v < 0.0 { sim_world.loss_fraction = 0.0; }
+                    else if v > 1.0 { sim_world.loss_fraction = 1.0; }
+                    else { sim_world.loss_fraction = v; }
+                }
             }
         }
     };
