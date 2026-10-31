@@ -148,6 +148,15 @@ fn tool_named(name: const u8[:]) -> ToolName, bool {
     if name == "restore_profile" {
         return ToolName.RestoreProfile, true;
     }
+    if name == "discover_topology" {
+        return ToolName.DiscoverTopology, true;
+    }
+    if name == "inspect_system" {
+        return ToolName.InspectSystem, true;
+    }
+    if name == "propose_ruleset" {
+        return ToolName.ProposeRuleset, true;
+    }
     return ToolName.ReadObservation, false;
 }
 
@@ -655,6 +664,31 @@ fn validate_read_call(text: const u8[:], expected: ToolName) -> ReadCall {
             return bad_read(r1);
         }
         return ReadCall { ok: true, tool: expected, arg: scope_id };
+    }
+    if expected == ToolName.DiscoverTopology {
+        let known: const u8[:][2] = ["path_id", "scope_id"];
+        if !no_unknown(args, known) {
+            return bad_read("unknown argument present");
+        }
+        let path_id, r1, ok1 = get_id(args, "path_id", 64);
+        if !ok1 { return bad_read(r1); }
+        let scope_id, r2, ok2 = get_id(args, "scope_id", 64);
+        if !ok2 { return bad_read(r2); }
+        return ReadCall { ok: true, tool: expected, arg: path_id };
+    }
+    if expected == ToolName.InspectSystem {
+        let known: const u8[:][2] = ["path_id", "what"];
+        if !no_unknown(args, known) {
+            return bad_read("unknown argument present");
+        }
+        let path_id, r1, ok1 = get_id(args, "path_id", 64);
+        if !ok1 { return bad_read(r1); }
+        let what_node = json::member(args, "what");
+        if !what_node { return bad_read("missing required text"); }
+        let ws, wis = json::as_string(what_node);
+        if !wis { return bad_read("text is not a string"); }
+        if ws != "qdisc" && ws != "net" && ws != "proc" && ws != "all" { return bad_read("integer outside permitted range"); }
+        return ReadCall { ok: true, tool: expected, arg: path_id };
     }
     let known: const u8[:][1] = ["action_id"];
     if !no_unknown(args, known) {

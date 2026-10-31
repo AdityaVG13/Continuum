@@ -58,6 +58,11 @@ int32_t ct_reconcile_json(gs_slice_u8 req, gs_slice_u8 receipt,
     return bridge_json(ct_watchdog_reconcile, req, receipt, out_len);
 }
 
+int32_t ct_qos_json(gs_slice_u8 req, gs_slice_u8 receipt,
+                    int64_t *out_len) {
+    return bridge_json(ct_qos_read, req, receipt, out_len);
+}
+
 #ifdef __cplusplus
 }
 #endif

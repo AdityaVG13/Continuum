@@ -401,29 +401,15 @@ fn meta_parse_response(body: const u8[:], request_id: const u8[:],
     return true;
 }
 
-// Continuation under stateless replay: resend the model, instructions and
-// tools, then the prior input items, the prior output items byte-for-byte,
-// and the new function_call_output. No previous_response_id: with
-// store:false the server keeps nothing, so the history travels in input.
-fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
-        instructions: const u8[:], prior_input_json: const u8[:],
-        prior_output_json: const u8[:], call_id: const u8[:],
-        result_json: const u8[:], tools_json: const u8[:],
-        out: u8[>..]&) -> bool {
-    if !valid_id(role_model, 128) {
-        return false;
-    }
-    if instructions.len <= 0 || instructions.len > 8192 {
-        return false;
-    }
+// The input array a later continuation must resend: prior items, the prior
+// output items, and the tool receipt. Empty arrays fail. This is the only
+// builder; meta_continuation_body embeds its result so the two cannot drift.
+fn meta_replay_input(prior_input_json: const u8[:], prior_output_json: const u8[:],
+        call_id: const u8[:], result_json: const u8[:], out: u8[>..]&) -> bool {
     if !valid_id(call_id, 128) {
         return false;
     }
     if result_json.len <= 0 || result_json.len > 8192 {
-        return false;
-    }
-    if config.max_output_tokens <= 0
-            || config.max_output_tokens > MAX_OUTPUT_TOKENS {
         return false;
     }
     var r1 = json::reader(prior_input_json);
@@ -450,14 +436,6 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
     if !json::finish(r3) {
         return false;
     }
-    var r4 = json::reader(tools_json);
-    if json::peek(r4) != '[' {
-        return false;
-    }
-    json::skip(r4);
-    if !json::finish(r4) {
-        return false;
-    }
     if prior_input_json.len < 2 || prior_output_json.len < 2 {
         return false;
     }
@@ -466,11 +444,7 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
     if inner_in.len <= 0 || inner_out.len <= 0 {
         return false;
     }
-    out.append("{\"model\":");
-    json::format_string(out, role_model);
-    out.append(",\"instructions\":");
-    json::format_string(out, instructions);
-    out.append(",\"input\":[");
+    out.append("[");
     out.append(inner_in);
     out.append(",");
     out.append(inner_out);
@@ -479,6 +453,46 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
     out.append(",\"output\":");
     json::format_string(out, result_json);
     out.append("}]");
+    return true;
+}
+
+// Continuation under stateless replay: resend the model, instructions and
+// tools, then the prior input items, the prior output items byte-for-byte,
+// and the new function_call_output. No previous_response_id: with
+// store:false the server keeps nothing, so the history travels in input.
+fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
+        instructions: const u8[:], prior_input_json: const u8[:],
+        prior_output_json: const u8[:], call_id: const u8[:],
+        result_json: const u8[:], tools_json: const u8[:],
+        out: u8[>..]&) -> bool {
+    if !valid_id(role_model, 128) {
+        return false;
+    }
+    if instructions.len <= 0 || instructions.len > 8192 {
+        return false;
+    }
+    if config.max_output_tokens <= 0
+            || config.max_output_tokens > MAX_OUTPUT_TOKENS {
+        return false;
+    }
+    var r4 = json::reader(tools_json);
+    if json::peek(r4) != '[' {
+        return false;
+    }
+    json::skip(r4);
+    if !json::finish(r4) {
+        return false;
+    }
+    var replayed: u8[>..] = [];
+    if !meta_replay_input(prior_input_json, prior_output_json, call_id, result_json, replayed) {
+        return false;
+    }
+    out.append("{\"model\":");
+    json::format_string(out, role_model);
+    out.append(",\"instructions\":");
+    json::format_string(out, instructions);
+    out.append(",\"input\":");
+    out.append(replayed);
     out.append(",\"tool_choice\":\"auto\",\"parallel_tool_calls\":false,");
     out.append("\"store\":false,");
     out.append("\"include\":[\"reasoning.encrypted_content\"],\"stream\":false,");
@@ -489,3 +503,4 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
     out.append("}");
     return out.len <= MAX_META_BODY_BYTES;
 }
+

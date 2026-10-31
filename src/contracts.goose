@@ -5,7 +5,7 @@ namespace continuum;
 
 enum Status { NotImplemented, Accepted, Rejected, Pending, Completed, Failed }
 enum Provenance { Unset, Synthetic, Recorded, Live }
-enum ToolName { ReadObservation, ReadTaskContext, ListProfiles, ApplyProfile, ReadActionResult, RestoreProfile }
+enum ToolName { ReadObservation, ReadTaskContext, ListProfiles, ApplyProfile, ReadActionResult, RestoreProfile, DiscoverTopology, InspectSystem, ProposeRuleset }
 enum ControllerPhase { Unconfigured, Observing, AwaitingMeta, Admitting, Applying, Verifying, Restoring, Paused, Failed }
 enum ActionKind { ApplyProfile, RestoreProfile }
 enum TaskPhase { Unconfigured, Pending, Running, AwaitingValidation, Committed, Failed }

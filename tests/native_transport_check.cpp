@@ -3,6 +3,12 @@
 // `make transport-check` spawns itself; this binary assumes it at
 // host:port with ROUTER_PASSWORD in env.
 // Build with `make transport-check` (C++20, repo native files).
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +20,88 @@ static int failures = 0;
 static void check(bool cond, const char *label) {
     std::printf("%s %s\n", cond ? "ok" : "FAIL", label);
     if (!cond) failures++;
+}
+
+static bool http_exchange(const char *host, int port, const std::string &req,
+                          std::string &resp) {
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return false;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    timeval tv{};
+    tv.tv_sec = 2;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof addr) != 0) {
+        close(fd);
+        return false;
+    }
+    size_t sent = 0;
+    while (sent < req.size()) {
+        ssize_t n = send(fd, req.data() + sent, req.size() - sent, 0);
+        if (n <= 0) {
+            close(fd);
+            return false;
+        }
+        sent += static_cast<size_t>(n);
+    }
+    resp.clear();
+    char buf[2048];
+    for (;;) {
+        ssize_t n = recv(fd, buf, sizeof buf, 0);
+        if (n < 0) {
+            close(fd);
+            return false;
+        }
+        if (n == 0) break;
+        resp.append(buf, static_cast<size_t>(n));
+    }
+    close(fd);
+    return resp.compare(0, 5, "HTTP/") == 0;
+}
+
+static long json_long(const std::string &body, const char *key) {
+    std::string q = std::string("\"") + key + "\":";
+    size_t p = body.find(q);
+    if (p == std::string::npos) return -1;
+    p += q.size();
+    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+    return std::atol(body.c_str() + p);
+}
+
+static long status_sessions(const char *host, int port) {
+    std::string req = std::string("GET /api/status HTTP/1.0\r\nHost: ") + host +
+                      "\r\nConnection: close\r\n\r\n";
+    std::string resp;
+    if (!http_exchange(host, port, req, resp)) return -1;
+    return json_long(resp, "sessions");
+}
+
+// Drops every Bearer session, the way a firmware reboot does. The next
+// apply must log in again; a cached token that is not retried is a miss.
+static bool reboot_router(const char *host, int port, const char *pw) {
+    std::string payload = std::string("{\"password\":\"") + pw + "\"}";
+    std::string req = "POST /api/login HTTP/1.0\r\nHost: " + std::string(host) +
+                      "\r\nContent-Type: application/json\r\nContent-Length: " +
+                      std::to_string(payload.size()) +
+                      "\r\nConnection: close\r\n\r\n" + payload;
+    std::string resp;
+    if (!http_exchange(host, port, req, resp)) return false;
+    const char *marker = "\"session\": \"";
+    size_t p = resp.find(marker);
+    if (p == std::string::npos) return false;
+    p += std::strlen(marker);
+    size_t e = resp.find('"', p);
+    if (e == std::string::npos || e == p) return false;
+    std::string tok = resp.substr(p, e - p);
+    req = "POST /api/reboot HTTP/1.0\r\nHost: " + std::string(host) +
+          "\r\nAuthorization: Bearer " + tok +
+          "\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    resp.clear();
+    if (!http_exchange(host, port, req, resp)) return false;
+    return resp.find(" 200 ") != std::string::npos;
 }
 
 static std::string apply_json(const char *host, int port) {
@@ -116,6 +204,43 @@ int main(int argc, char **argv) {
     std::string con2(reinterpret_cast<char *>(receipt), (size_t)out_len);
     check(con2.find("\"in_sync\":false") != std::string::npos,
           "post-restore reconcile reports drift");
+
+    // Five applies must not open five router sessions. Login-per-call
+    // grows the session table by five; a reused session grows it by at most one.
+    long sessions_before = status_sessions(host, port);
+    check(sessions_before >= 0, "status reports session count");
+    int repeat_ok = 0;
+    for (int n = 0; n < 5; n++) {
+        out_len = 0;
+        if (ct_profile_apply(req, out, &out_len) == CT_OK) {
+            std::string recn(reinterpret_cast<char *>(receipt), (size_t)out_len);
+            if (recn.find("\"verified\":true") != std::string::npos) repeat_ok++;
+        }
+    }
+    check(repeat_ok == 5, "five repeat applies verify");
+    long sessions_after = status_sessions(host, port);
+    check(sessions_after >= 0 && sessions_after - sessions_before <= 1,
+          "five applies open at most one session");
+
+    // Reboot while the session is still cached. A retry-less cache returns
+    // the router's 401 and never applies; login-per-call happens to survive
+    // because it never held a token.
+    check(reboot_router(host, port, saved_pw.c_str()), "router reboot accepted");
+    out_len = 0;
+    int32_t after_boot = ct_profile_apply(req, out, &out_len);
+    check(after_boot == CT_OK, "apply after reboot returns CT_OK");
+    if (after_boot == CT_OK) {
+        std::string recb(reinterpret_cast<char *>(receipt), (size_t)out_len);
+        check(recb.find("\"verified\":true") != std::string::npos,
+              "apply after reboot verified");
+    }
+
+    // A password change must not reuse the previous session.
+    setenv("ROUTER_PASSWORD", "definitely-wrong", 1);
+    out_len = 0;
+    check(ct_profile_apply(req, out, &out_len) == CT_REJECTED,
+          "changed password rejected");
+    setenv("ROUTER_PASSWORD", saved_pw.c_str(), 1);
 
     // A receipt buffer that cannot hold the answer is an explicit error.
     uint8_t tiny[8];

@@ -37,6 +37,10 @@ int32_t ct_meta_close(ct_handle handle);
 int32_t ct_profile_apply(ct_bytes admitted_request_json, ct_output receipt_json, int64_t *out_length);
 int32_t ct_profile_restore(ct_bytes admitted_request_json, ct_output receipt_json, int64_t *out_length);
 int32_t ct_watchdog_reconcile(ct_bytes owned_state_json, ct_output receipt_json, int64_t *out_length);
+/* Read the router's QoS object. Same request JSON as apply; profile, rate
+ * and revision in the request are routing ballast, not the answer.
+ * Receipt: {"qos_on":true,"rate_mbit":90,"revision":2} from the device. */
+int32_t ct_qos_read(ct_bytes req, ct_output out, int64_t *out_len);
 int32_t ct_observation_read(ct_bytes query_json, ct_output observation_json, int64_t *out_length);
 
 /* Optional owned-link object delivery, separate from the Meta HTTPS adapter. */
@@ -92,6 +96,12 @@ int32_t ct_vault_delete(ct_bytes ref);
 int32_t ct_host_stage(ct_bytes req, ct_output out, int64_t *out_len);
 int32_t ct_host_rejoin(ct_bytes req, ct_output out, int64_t *out_len);
 int32_t ct_host_iface_ip(ct_bytes req, ct_output out, int64_t *out_len);
+
+/* Read-only topology/traffic inspection for agent-aware optimization */
+int32_t ct_inspect_qdisc(ct_bytes req, ct_output out, int64_t *out_len);
+int32_t ct_inspect_net(ct_bytes req, ct_output out, int64_t *out_len);
+int32_t ct_inspect_proc(ct_bytes req, ct_output out, int64_t *out_len);
+int32_t ct_discover_full(ct_bytes req, ct_output out, int64_t *out_len);
 
 #ifdef __cplusplus
 }

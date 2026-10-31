@@ -17,6 +17,7 @@ struct SimWorld {
     seed: u64,
     load_fraction: f64,
     loss_fraction: f64,
+    provider_delay_ms: f64,
 }
 
 var sim_world: SimWorld = SimWorld {
@@ -27,6 +28,7 @@ var sim_world: SimWorld = SimWorld {
     seed: 1,
     load_fraction: 1.0,
     loss_fraction: 0.0,
+    provider_delay_ms: 0.0,
 };
 
 // Queueing delay under the current offered load. FIFO: delay grows with
@@ -63,6 +65,7 @@ fn sim_reset(seed: u64) {
     sim_world.seed = seed;
     sim_world.load_fraction = 1.0;
     sim_world.loss_fraction = 0.0;
+    sim_world.provider_delay_ms = 0.0;
 }
 
 // Scenario controls: offered load (1.0 = link saturation) and loss. These
@@ -85,6 +88,17 @@ fn sim_set_loss(fraction: f64) {
         return;
     }
     sim_world.loss_fraction = fraction;
+}
+
+// Delay that belongs to the remote service, not the queue. Added to the
+// loaded echo and reported on its own field so a reader can tell the two
+// apart. Negative values floor at zero; the field is not a queue model.
+fn sim_set_provider_ms(ms: f64) {
+    if ms < 0.0 {
+        sim_world.provider_delay_ms = 0.0;
+        return;
+    }
+    sim_world.provider_delay_ms = ms;
 }
 
 // A route change invalidates every baseline taken before it: the epoch is
@@ -149,7 +163,7 @@ fn sim_observe(path_id: const u8[:], sample: i64) -> ObservationResult {
     let delay = sim_queue_delay_ms(sim_world.applied_profile_id);
     let h = hash(sim_world.seed + sample as! u64);
     let jitter = (h % 4000) as! f64 / 1000.0 - 2.0;
-    let loaded = sim_world.baseline_rtt_ms + delay + jitter;
+    let loaded = sim_world.baseline_rtt_ms + delay + jitter + sim_world.provider_delay_ms;
     let lost = (20.0 * sim_world.loss_fraction) as i64;
     return ObservationResult {
         outcome: Outcome { status: Status.Completed, message: "sim window" },
@@ -166,6 +180,7 @@ fn sim_observe(path_id: const u8[:], sample: i64) -> ObservationResult {
             loaded_rtt_ms: loaded,
             gateway_rtt_ms: sim_world.baseline_rtt_ms / 2.0,
             application_echo_ms: loaded,
+            provider_service_ms: sim_world.provider_delay_ms,
             utilization: min(sim_world.load_fraction, 1.0),
             loss_fraction: sim_world.loss_fraction,
             metrics_known: true,
@@ -183,7 +198,8 @@ fn sim_save(path: const u8[:]) -> bool {
         "\nepoch=", sim_world.route_epoch,
         "\nseed=", sim_world.seed as i64,
         "\nload=", sim_world.load_fraction,
-        "\nloss=", sim_world.loss_fraction, "\n");
+        "\nloss=", sim_world.loss_fraction,
+        "\nprovider=", sim_world.provider_delay_ms, "\n");
     return write_file_atomic(path, text);
 }
 
@@ -229,6 +245,12 @@ fn sim_load(path: const u8[:]) -> bool {
                     if v < 0.0 { sim_world.loss_fraction = 0.0; }
                     else if v > 1.0 { sim_world.loss_fraction = 1.0; }
                     else { sim_world.loss_fraction = v; }
+                }
+            } else if key == "provider" {
+                let v, ok = parse_flt(val);
+                if ok {
+                    if v < 0.0 { sim_world.provider_delay_ms = 0.0; }
+                    else { sim_world.provider_delay_ms = v; }
                 }
             }
         }

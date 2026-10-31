@@ -1,8 +1,8 @@
 // The phase-1 brain: a deterministic policy, not a model. It decides one
 // thing (is this queue bloated enough to touch?), builds the exact request
-// the guardian must admit, and scores the outcome. The Meta controller seam
-// (controller_tick) stays the decision-maker for live runs; this policy is
-// the testable stand-in that proves the loop mechanics in the sim.
+// the guardian must admit, and scores the outcome. The participant loop is
+// the decision-maker for a live run; this policy is the testable stand-in
+// that proves the daemon mechanics in the sim.
 import .contracts;
 import .sim;
 import .controller;

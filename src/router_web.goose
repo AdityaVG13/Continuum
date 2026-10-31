@@ -13,6 +13,7 @@ namespace continuum;
 extern fn ct_apply_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
 extern fn ct_restore_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
 extern fn ct_reconcile_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
+extern fn ct_qos_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
 
 struct WebResult {
     ok: bool = false,
@@ -205,4 +206,64 @@ fn web_reconcile(scope_id: const u8[:], lease_id: const u8[:],
         return bad_web("transport returned no receipt");
     }
     return parse_reconcile_receipt(receipt[..n], revision);
+}
+
+struct QosView {
+    ok: bool = false,
+    reason: u8[..256] = "",
+    qos_on: bool = false,
+    rate_mbit: i64 = -1,
+    revision: i64 = -1,
+}
+
+fn bad_qos(reason: const u8[:]) -> QosView {
+    return QosView { ok: false, reason: reason };
+}
+
+// The router's QoS object, not a remembered apply. A mutation receipt
+// cannot answer this read.
+fn parse_qos_receipt(text: u8[:]) -> QosView {
+    if text.len <= 0 || text.len > 2048 {
+        return bad_qos("receipt size outside 1..2048");
+    }
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(text, doc, decoded);
+    if !root {
+        return bad_qos("receipt is not JSON");
+    }
+    if json::member(root, "applied") || json::member(root, "restored") {
+        return bad_qos("qos read carried a mutation marker");
+    }
+    let on, is_b = json::as_bool(json::member(root, "qos_on"));
+    if !is_b {
+        return bad_qos("qos read lacks qos_on");
+    }
+    let rate, is_n = json::as_i64(json::member(root, "rate_mbit"));
+    if !is_n || rate < 1 || rate > 1000 {
+        return bad_qos("qos read lacks a rate");
+    }
+    let rev, is_r = json::as_i64(json::member(root, "revision"));
+    if !is_r || rev < 0 {
+        return bad_qos("qos read lacks a revision");
+    }
+    return QosView { ok: true, qos_on: on, rate_mbit: rate, revision: rev };
+}
+
+fn web_qos(host: const u8[:], port: i64) -> QosView {
+    var req_text: u8[>..] = [];
+    if !web_request_json("baseline-fifo", 100, "lab-sim", "router-read",
+            0, host, port, req_text) {
+        return bad_qos("request fields invalid");
+    }
+    var receipt: u8[..2048] = [0; 2048];
+    var n: i64 = 0;
+    let rc = ct_qos_json(req_text, receipt, n);
+    if rc != 0 {
+        return bad_qos(transport_reason(rc));
+    }
+    if n <= 0 || n > receipt.len {
+        return bad_qos("transport returned no receipt");
+    }
+    return parse_qos_receipt(receipt[..n]);
 }

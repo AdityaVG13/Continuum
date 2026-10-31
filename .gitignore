@@ -7,3 +7,4 @@ run-artifacts/
 internal/
 lab/
 AGENTS.md
+.asgrep/

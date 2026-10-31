@@ -25,10 +25,7 @@ Working today:
   call per submit via the system TLS stack; fail-closed without a key
   (`make meta-live`).
 
-Not yet done: the first live Meta round trip (needs `MODEL_API_KEY`
-and event eligibility), the controller tick, workload integration and
-the first full loop. `docs/STATUS.md` is the honest ledger;
-`docs/BUILD_PLAN.md` orders the remaining tickets.
+Not yet done: a keyed participant run (needs `MODEL_API_KEY`), a real Meta workload, and the measured comparison against a rule. `docs/STATUS.md` is the honest ledger. The six-tool walk is the mechanical proof and spends no model call.
 
 Every claim in this repository is scoped to the evidence behind it -
 see "Claim discipline" below.

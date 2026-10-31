@@ -39,7 +39,9 @@ Meta returns completed `function_call` items; the app returns `function_call_out
 
 The supplied tool definitions use `strict: false` and full local schema validation by design. Preflight can later establish whether a reduced provider-strict schema is useful. Neither choice changes the local checks. No general shell, arbitrary interface, caller-supplied shaping rate or privileged file path is exposed to the model.
 
-## 5. Planned application loop
+## 5. Application loop
+
+Against the simulator this loop is implemented. `run_participant` drives it from recorded replies so a missing key cannot hide a substituted profile. `run_participant_live` is the same dispatch with `request_meta` and `submit_tool_result`. `--loop` uses the live entry only when `MODEL_API_KEY` is set. The steps below are the contract that entry has to keep.
 
 1. Build a controller context from current observations, task contract, calibrated profiles and active lease. Include model role, request identity, session clock and deadline.
 2. Submit one bounded request to Meta. The C++ HTTPS adapter copies any bytes it retains; Goose owns protocol meaning and admission state.

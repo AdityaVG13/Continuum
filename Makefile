@@ -3,7 +3,7 @@ CXX ?= c++
 BUILD := .build
 export GOOSE_HOME := $(abspath $(BUILD)/goose-cache)
 
-.PHONY: all check status sim daemon test web-e2e web-e2e-run meta-live native-check cpp-status transport-check asus-check host-check leap leap-e2e help clean
+.PHONY: all check status sim daemon loop loop-router router-cli test web-e2e web-e2e-run meta-live native-check cpp-status transport-check asus-check host-check leap leap-e2e help clean
 
 all: help
 
@@ -25,8 +25,30 @@ sim:
 daemon:
 	$(GOOSE) run src/main.goose -- --daemon
 
+loop: $(BUILD)/continuum
+	./$(BUILD)/continuum --loop
+
+# Same entry as `make loop`, pointed at the C++ double. The recipe
+# spawns the double and tears it down. Green only if --loop itself
+# reads the revision move and the post-restore drift.
+loop-router: $(BUILD)/continuum $(BUILD)/router_double
+	@ROUTER_PASSWORD=test-only-pw $(BUILD)/router_double 18095 >/dev/null 2>&1 & pid=$$!; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -A "OpenAI File Downloader, XaiImageApiFetch/1.0" -o /dev/null http://127.0.0.1:18095/api/status && break; sleep 1; done; \
+	ROUTER_HOST=127.0.0.1 ROUTER_PORT=18095 ROUTER_PASSWORD=test-only-pw env -u MODEL_API_KEY $(BUILD)/continuum --loop; rc=$$?; \
+	if [ $$rc = 0 ]; then \
+	  rev=$$(curl -s -A "OpenAI File Downloader, XaiImageApiFetch/1.0" http://127.0.0.1:18095/api/status | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision"])'); \
+	  if [ "$$rev" != 3 ]; then echo "LOOP_ROUTER_RED router revision $$rev, expected 3"; rc=1; else echo "LOOP_ROUTER_READBACK revision=$$rev"; fi; \
+	fi; \
+	kill $$pid 2>/dev/null; wait $$pid 2>/dev/null; exit $$rc
+
+# Operator tuner against the C++ double. status must match an independent
+# QoS read, apply must leave the setting, restore must retire that revision.
+router-cli: $(BUILD)/continuum $(BUILD)/router_double tests/router_cli.sh
+	@sh tests/router_cli.sh $(BUILD)/continuum $(BUILD)/router_double 18096
+
 test:
 	$(GOOSE) run tests/sim_loop.goose
+	$(GOOSE) run tests/sim_controller.goose
 	$(GOOSE) run tests/foundation.goose
 	$(GOOSE) run tests/toolbind.goose
 	$(GOOSE) run tests/metamorphic.goose
@@ -184,6 +206,9 @@ help:
 	@echo 'make status        Build and print implementation status'
 	@echo 'make sim           Deterministic sim transcript (no network)'
 	@echo 'make daemon        Deterministic daemon transcript (no network, no model calls)'
+	@echo 'make loop          Six-tool sim loop, labelled simulated (live leg needs MODEL_API_KEY; fails closed without)'
+	@echo 'make loop-router   Same entry pointed at the C++ double (self-contained)'
+	@echo 'make router-cli    Tuner commands against the C++ double (status, apply, restore)'
 	@echo 'make test          Goose contract suites (sim-only, no network)'
 	@echo 'make web-e2e       Build the Goose->C++->router loop binary'
 	@echo 'make web-e2e-run   Run it end to end vs the C++ double (self-contained)'

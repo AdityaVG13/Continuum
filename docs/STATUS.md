@@ -15,7 +15,7 @@ Edition: **3.0 - specification and implementation**.
 | Capability | Status |
 | --- | --- |
 | Authenticated Meta model call | Request/continuation builders, typed Responses parse and curl-child HTTPS adapter implemented (`src/meta_shape.goose`, `src/meta_provider.goose`, `native/meta_web.cpp`); no live call yet - needs `MODEL_API_KEY` |
-| Meta model-driven action selection/tool loop | Controller tick still not implemented; `request_meta`/`submit_tool_result` wired with correlation, `make meta-live` fail-closed green without key |
+| Meta model-driven action selection/tool loop | `continuum --loop` still walks the six tools with no model call; that walk is the mechanical proof. The participant loop is separate: a recorded reply applies or abstains, and a keyed `--loop` gives the model the observation, the task and the catalogue, then feeds each receipt back. Abstain is a completed result. The comparison against a rule is not measured |
 | Meaningful Meta task execution and independent validator | Not implemented |
 | Live metrics and route tracking | Not implemented |
 | Guardian checks and authenticated privileged IPC | Guardian checks implemented (sim scope); privileged IPC not implemented |

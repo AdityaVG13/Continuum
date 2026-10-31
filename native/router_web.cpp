@@ -223,8 +223,32 @@ void put_receipt(ct_output out, int64_t *out_len, const std::string &s,
     rc = CT_OK;
 }
 
-// Login per call (no token caching): lab sessions are cheap and a cached
-// token that the router dropped on reboot is a stale-credential bug.
+// Session reuse is keyed by host, port and a fingerprint of
+// ROUTER_PASSWORD. A reboot or expiry answers 401; that drops the token
+// and logs in once. Caching the password itself, or reusing a token after
+// the password changes, is the bug the fingerprint exists to prevent.
+// One Goose thread calls in (ABI); the cache is not synchronized.
+struct SessionCache {
+    std::string host;
+    int port = 0;
+    uint64_t pw_fp = 0;
+    std::string token;
+};
+static SessionCache g_session;
+
+uint64_t pw_fingerprint(const char *pw) {
+    uint64_t h = 14695981039346656037ull;
+    for (const unsigned char *p =
+             reinterpret_cast<const unsigned char *>(pw);
+         *p; ++p) {
+        h ^= *p;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+void drop_session() { g_session = SessionCache{}; }
+
 int32_t router_login(const std::string &host, int port, std::string &token) {
     const char *pw = std::getenv("ROUTER_PASSWORD");
     if (!pw || !*pw) return CT_INVALID_ARGUMENT;
@@ -242,21 +266,61 @@ int32_t router_login(const std::string &host, int port, std::string &token) {
     return CT_OK;
 }
 
-int32_t qos_set(const RouterRef &r, bool on, int rate, long &rev_out) {
-    std::string token;
-    int32_t rc = router_login(r.host, r.port, token);
+int32_t acquire_session(const std::string &host, int port, std::string &token,
+                        bool force) {
+    const char *pw = std::getenv("ROUTER_PASSWORD");
+    if (!pw || !*pw) return CT_INVALID_ARGUMENT;
+    uint64_t fp = pw_fingerprint(pw);
+    if (!force && !g_session.token.empty() && g_session.host == host &&
+        g_session.port == port && g_session.pw_fp == fp) {
+        token = g_session.token;
+        return CT_OK;
+    }
+    int32_t rc = router_login(host, port, token);
+    if (rc != CT_OK) {
+        drop_session();
+        return rc;
+    }
+    g_session.host = host;
+    g_session.port = port;
+    g_session.pw_fp = fp;
+    g_session.token = token;
+    return CT_OK;
+}
+
+// One authed round. A 401 drops the session, logs in once, and retries.
+// A second 401 is a real rejection, not another retry.
+int32_t authed_exchange(const std::string &host, int port, bool is_post,
+                        const std::string &path, const std::string &json,
+                        std::string &token, int &status, std::string &body) {
+    int32_t rc = acquire_session(host, port, token, false);
     if (rc != CT_OK) return rc;
-    char payload[256];
-    std::snprintf(payload, sizeof payload,
-                  "{\"on\":%s,\"rate_mbit\":%d}", on ? "true" : "false",
-                  rate);
-    int status = 0;
-    std::string body;
-    rc = http_round(r.host, r.port, post(r.host, r.port, "/api/qos",
-                                         payload, token),
-                    status, body);
+    std::string req = is_post ? post(host, port, path, json, token)
+                              : get(host, port, path, token);
+    rc = http_round(host, port, req, status, body);
+    if (rc != CT_OK) return CT_FAILED;
+    if (status != 401) return CT_OK;
+    drop_session();
+    rc = acquire_session(host, port, token, true);
+    if (rc != CT_OK) return rc;
+    req = is_post ? post(host, port, path, json, token)
+                  : get(host, port, path, token);
+    rc = http_round(host, port, req, status, body);
     if (rc != CT_OK) return CT_FAILED;
     if (status == 401) return CT_REJECTED;
+    return CT_OK;
+}
+
+int32_t qos_set(const RouterRef &r, bool on, int rate, long &rev_out) {
+    char payload[256];
+    std::snprintf(payload, sizeof payload, "{\"on\":%s,\"rate_mbit\":%d}",
+                  on ? "true" : "false", rate);
+    int status = 0;
+    std::string body;
+    std::string token;
+    int32_t rc = authed_exchange(r.host, r.port, true, "/api/qos", payload,
+                                 token, status, body);
+    if (rc != CT_OK) return rc;
     if (status == 400) return CT_INVALID_ARGUMENT;
     if (status != 200) return CT_FAILED;
     // Readback: the write counts only if the router reports it.
@@ -270,9 +334,8 @@ int32_t qos_set(const RouterRef &r, bool on, int rate, long &rev_out) {
     if (!body.empty() && (qon != on || qrate != rate)) {
         int gs = 0;
         std::string gb;
-        rc = http_round(r.host, r.port,
-                        get(r.host, r.port, "/api/qos", token), gs, gb);
-        if (rc != CT_OK || gs != 200) return CT_FAILED;
+        rc = authed_exchange(r.host, r.port, false, "/api/qos", "", token, gs, gb);
+        if (rc != CT_OK || gs != 200) return rc != CT_OK ? rc : CT_FAILED;
         if (!json_bool(gb, "on", qon) || !json_int(gb, "rate_mbit", qrate) ||
             !json_int(gb, "revision", qrev))
             return CT_FAILED;
@@ -328,15 +391,11 @@ int32_t ct_watchdog_reconcile(ct_bytes req, ct_output out, int64_t *out_len) {
     if (!parse_request((const char *)req.data, req.len, r))
         return CT_INVALID_ARGUMENT;
     std::string token;
-    int32_t rc = router_login(r.host, r.port, token);
-    if (rc != CT_OK) return rc;
     int status = 0;
     std::string body;
-    rc = http_round(r.host, r.port,
-                    get(r.host, r.port, "/api/status", token), status,
-                    body);
-    if (rc != CT_OK) return CT_FAILED;
-    if (status == 401) return CT_REJECTED;
+    int32_t rc = authed_exchange(r.host, r.port, false, "/api/status", "",
+                                 token, status, body);
+    if (rc != CT_OK) return rc;
     if (status != 200) return CT_FAILED;
     long rev = 0, boot = 0;
     if (!json_int(body, "revision", rev) || !json_int(body, "boot_id", boot))
@@ -347,6 +406,32 @@ int32_t ct_watchdog_reconcile(ct_bytes req, ct_output out, int64_t *out_len) {
         "{\"revision\":%ld,\"boot_id\":%ld,\"expected_revision\":%ld,"
         "\"in_sync\":%s}",
         rev, boot, r.revision, rev == r.revision ? "true" : "false");
+    if (n <= 0 || n >= (int)sizeof receipt) return CT_FAILED;
+    put_receipt(out, out_len, std::string(receipt, (size_t)n), rc);
+    return rc;
+}
+int32_t ct_qos_read(ct_bytes req, ct_output out, int64_t *out_len) {
+    if (!out_len || !req.data) return CT_INVALID_ARGUMENT;
+    RouterRef r;
+    if (!parse_request((const char *)req.data, req.len, r))
+        return CT_INVALID_ARGUMENT;
+    std::string token;
+    int status = 0;
+    std::string body;
+    int32_t rc = authed_exchange(r.host, r.port, false, "/api/qos", "",
+                                 token, status, body);
+    if (rc != CT_OK) return rc;
+    if (status != 200) return CT_FAILED;
+    bool qon = false;
+    long qrate = 0, qrev = 0;
+    if (!json_bool(body, "on", qon) || !json_int(body, "rate_mbit", qrate) ||
+        !json_int(body, "revision", qrev) || qrate < 1 || qrate > 1000 ||
+        qrev < 0)
+        return CT_FAILED;
+    char receipt[128];
+    int n = std::snprintf(receipt, sizeof receipt,
+                          "{\"qos_on\":%s,\"rate_mbit\":%ld,\"revision\":%ld}",
+                          qon ? "true" : "false", qrate, qrev);
     if (n <= 0 || n >= (int)sizeof receipt) return CT_FAILED;
     put_receipt(out, out_len, std::string(receipt, (size_t)n), rc);
     return rc;

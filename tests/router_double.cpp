@@ -767,6 +767,7 @@ void handle(int fd, const Request &rq) {
             json(fd, 200,
                  "{\"revision\": " + std::to_string(G.revision) +
                      ", \"boot_id\": " + std::to_string(G.boot_id) +
+                     ", \"sessions\": " + std::to_string(g_sessions.size()) +
                      ", \"setup_done\": " +
                      std::string(G.setup_done ? "true" : "false") +
                      ", \"ssid\": \"" + json_escape(G.ssid) +
