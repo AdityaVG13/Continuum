@@ -55,13 +55,16 @@ LAN-only target never crosses the qdisc under test.
    `qdisc_tool_unavailable` means this unit has no `tc` and the demo stops
    here; `qdisc_root_already_managed` means vendor QoS owns the root and the
    tool will not stomp it.
-3. Baseline evidence: `continuum --measure <far-host>:<port>/ping /bulk`
-   (>= 20 samples, clean verdict).
+3. Baseline evidence: `continuum --measure <far-host>:<port>/ping /bulk --upload`
+   (>= 20 samples, clean verdict). The upload load is the one a router's egress
+   shaping can influence; a download run is a useful control, not the CAKE claim.
+   The far end must accept `POST /bulk`; a rejected upload is refused as
+   `no_load_observed` rather than counted as load.
 4. Apply: `continuum --device-qos '{"bandwidth_kbps":N,"interface":"eth0","mode":"cake","overhead_bytes":0}' --execute`
    for a controlled A/B, or `continuum --talk "<owner request>"` to let Meta
    choose and apply under owner policy. The receipt must show `qos_applied`
    with `rate_readback:"verified"`.
-5. After evidence: repeat the same `--measure` command.
+5. After evidence: repeat the same `--measure ... --upload` command.
 6. Undo: `continuum --device-qos-restore --execute` (or Meta's
    `restore_qos`), then `--measure` once more to prove the path returned.
 

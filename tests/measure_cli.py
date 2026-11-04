@@ -21,6 +21,7 @@ from typing import NoReturn
 BULK_BYTES = 2 << 20
 PING_BODY = b"pong\n"
 BULK_BODY = b"x" * BULK_BYTES
+UPLOAD_BYTES = 262144
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -45,6 +46,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        remaining = int(self.headers.get("Content-Length") or 0)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+        if self.path.startswith("/bulk") and remaining == 0:
+            self.send_response(200)
+        else:
+            # A refused upload is not a filled pipe; the client must not count it.
+            self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
 
     def log_message(self, format, *args):
         pass
@@ -137,15 +154,36 @@ def main():
         if stored != receipt:
             fail("the artifact must be the printed receipt, byte for byte")
 
+        # 6. Upload load is the direction a router's egress shaping can influence.
+        uploaded = run("--measure", target, load_path, "--upload")
+        if uploaded.returncode != 0:
+            fail("a clean upload run failed", uploaded.stdout + uploaded.stderr)
+        up = json.loads(uploaded.stdout.strip().splitlines()[-1])
+        up_evidence = up.get("evidence") or {}
+        if up.get("verdict") != "claimable":
+            fail("a clean upload run must be claimable", uploaded.stdout)
+        if up_evidence.get("load_direction") != "upload":
+            fail("the receipt must name the load direction", uploaded.stdout)
+        if up_evidence.get("load_bytes", 0) < UPLOAD_BYTES:
+            fail("one accepted upload must be counted as load", uploaded.stdout)
+        if up_evidence.get("loaded_samples") != 20:
+            fail("the upload window must carry the full sample count", uploaded.stdout)
+
+        # 7. A rejected upload is not a filled pipe.
+        refused_upload = run("--measure", target, "/nothing", "--upload")
+        if refused_upload.returncode == 0 or "no_load_observed" not in refused_upload.stdout:
+            fail("a rejected upload must not produce claimable evidence", refused_upload.stdout)
+
         second = run("--measure", target, load_path)
         if second.returncode != 0:
             fail("second run failed", second.stdout + second.stderr)
-        if len(list(device_dir.glob("measure-*.json"))) != 3:
-            fail("a later run must add evidence, never replace it")
+        artifact_count = len(list(device_dir.glob("measure-*.json")))
+        if artifact_count != 5:
+            fail("a later run must add evidence, never replace it", str(artifact_count))
 
     server.shutdown()
     server.server_close()
-    print("MEASURE_CHECK_GREEN target=%s samples=20 artifacts=3" % target)
+    print("MEASURE_CHECK_GREEN target=%s samples=20 artifacts=%d" % (target, artifact_count))
 
 
 if __name__ == "__main__":

@@ -306,7 +306,12 @@ fn main() {
         exit(continuum::takeover_cli(continuum::setup_directory()));
     }
     if argv.len == 4 && argv[1] == "--measure" {
-        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3]));
+        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3], false));
+    }
+    if argv.len == 5 && argv[1] == "--measure" && argv[4] == "--upload" {
+        // Egress shaping only sees what the client sends, so the bufferbloat
+        // check that can move under CAKE is an upload load.
+        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3], true));
     }
     if argv.len == 3 && argv[1] == "--device-mode" {
         let refused = continuum::device_set_mode(continuum::setup_directory(), argv[2]);
