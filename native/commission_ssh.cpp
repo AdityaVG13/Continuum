@@ -180,8 +180,23 @@ bool ct_commission_ssh(const ct_commission_connection &c,
     close(master);
     if (!exited) reap_owned(child, status);
     if (failed) return reject("ssh_private_channel_failed");
-    if (!program_sent) return reject(WIFEXITED(status) ?
-        "ssh_before_program_exit_" + std::to_string(WEXITSTATUS(status)) : "ssh_before_program_interrupted");
+    if (!program_sent) {
+        // ssh's own pre-authentication error line names the cause; exit 255
+        // alone does not (seen live on a GT-AX11000: "exit_255" and nothing
+        // to act on). Only fixed category tokens leave this function.
+        auto has = [&](const char *needle) { return incoming.find(needle) != std::string::npos; };
+        const char *cause = has("Connection refused") ? "_connection_refused"
+            : has("timed out") ? "_timeout"
+            : has("No route to host") ? "_no_route"
+            : has("Permission denied") ? "_auth_denied"
+            : (has("Host key verification failed") || has("IDENTIFICATION HAS CHANGED")) ? "_host_key_changed"
+            : has("no matching") ? "_algorithm_mismatch"
+            : has("Can't assign requested address") ? "_bind_failed"
+            : (has("Connection closed") || has("Connection reset")) ? "_closed_by_router"
+            : password_sent ? "_after_password" : "";
+        return reject(WIFEXITED(status) ?
+            "ssh_before_program_exit_" + std::to_string(WEXITSTATUS(status)) + cause : "ssh_before_program_interrupted");
+    }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return reject(WIFEXITED(status) ? "ssh_program_exit_" + std::to_string(WEXITSTATUS(status)) : "ssh_program_interrupted");
     if (incoming.size() > 65536 || incoming.find(c.password) != std::string::npos)

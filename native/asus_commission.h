@@ -230,6 +230,44 @@ bool commission_form(Session &s, const std::vector<std::pair<std::string, std::s
     return true;
 }
 
+// The nvram readback after restart_sshd proves the setting, not that the
+// daemon is listening: on a GT-AX11000 the first ssh right after it was
+// refused (exit 255). After a connection-phase failure, wait for the port to
+// accept a TCP connection from the same source address, bounded by seconds.
+bool commission_wait_port(const std::string &host, const std::string &source, int port, int seconds) {
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons((uint16_t)port);
+    if (port < 1 || port > 65535 || inet_pton(AF_INET, host.c_str(), &remote.sin_addr) != 1) return false;
+    for (int i = 0; i < seconds * 2; ++i) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return false;
+        bool ok = true;
+        if (!source.empty()) {
+            sockaddr_in local{};
+            local.sin_family = AF_INET;
+            ok = inet_pton(AF_INET, source.c_str(), &local.sin_addr) == 1 &&
+                 bind(fd, (sockaddr *)&local, sizeof local) == 0;
+        }
+        if (ok) {
+            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+            int rc = connect(fd, (sockaddr *)&remote, sizeof remote);
+            if (rc == 0) { close(fd); return true; }
+            if (errno == EINPROGRESS) {
+                pollfd p{fd, POLLOUT, 0};
+                int error = 0;
+                socklen_t length = sizeof error;
+                if (poll(&p, 1, 500) == 1 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0) {
+                    close(fd); return true;
+                }
+            }
+        }
+        close(fd);
+        poll(nullptr, 0, 500);
+    }
+    return false;
+}
+
 bool commission_ssh_settings(Session &s, const CommissionSnapshot &desired,
                              const std::string &user, const std::string &password) {
     if (!commission_form(s, {{"sshd_enable", desired.at("sshd_enable")},
@@ -737,7 +775,22 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         return commission_fail(out, out_len, reason, true);
     };
     std::string transport_diagnostic;
-    if (!ct_commission_ssh(connection, commission_runtime_program(), runtime_before, 20, &transport_diagnostic))
+    // A failure before the program is sent has no effect on the router, so a
+    // connection-phase failure (daemon still starting) is retried; a refused
+    // password or a changed host key is not, since retrying cannot fix it.
+    bool inventoried = false;
+    for (int attempt = 0; attempt < 4 && !inventoried; ++attempt) {
+        // Wait for the daemon only after a connection-phase failure, so a
+        // transport that answers at once never pays for the probe.
+        if (attempt && !commission_wait_port(connection.host, connection.source, connection.port, 30))
+            poll(nullptr, 0, 3000);
+        transport_diagnostic.clear();
+        inventoried = ct_commission_ssh(connection, commission_runtime_program(), runtime_before, 20, &transport_diagnostic);
+        if (inventoried || transport_diagnostic.rfind("ssh_before_program", 0) != 0 ||
+            transport_diagnostic.find("auth_denied") != std::string::npos ||
+            transport_diagnostic.find("host_key_changed") != std::string::npos) break;
+    }
+    if (!inventoried)
         return fail(transport_diagnostic.empty() ? "privileged_runtime_inventory_unavailable" : transport_diagnostic.c_str());
     if (!commission_runtime_valid(runtime_before)) return fail("privileged_runtime_inventory_unqualified");
     if (action == "qos") {

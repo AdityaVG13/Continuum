@@ -3,6 +3,19 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.3] - 2026-11-04
+
+- **Meta setup no longer fails on the router's SSH restart.** Turning on LAN
+  SSH restarts the router's SSH daemon; the first connection right after was
+  refused (`ssh_before_program_exit_255`, seen live on a GT-AX11000), so the
+  apply never ran. A connection-phase failure (nothing sent to the router yet)
+  now waits for the SSH port to accept connections and retries up to three
+  times; a refused password or a changed host key is not retried.
+- SSH failures name their cause (`connection_refused`, `timeout`,
+  `auth_denied`, `host_key_changed`, ...) instead of a bare exit code.
+- **The TUI opens about 5x faster** (2.5 s to 0.5 s measured on the lab Mac):
+  step 1 probes only gateways, not every silent host on the LAN.
+
 ## [0.2.2] - 2026-11-04
 
 - **Meta setup no longer runs out of calls before it acts.** The setup step's

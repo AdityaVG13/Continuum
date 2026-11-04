@@ -602,7 +602,11 @@ fn setup_identify(network: const u8[:]) -> u8[>..] {
     var out: u8[>..] = []; var n: i64 = 0;
     while n < ids.len {
         var label: u8[>..] = [];
-        if n >= 4 { label.append("not probed"); }
+        // Only gateways can be the router; probing every LAN neighbor cost a
+        // 1 s connect timeout per silent host before the first frame.
+        let kind = setup_nth_line(kinds, n);
+        let gateway = kind.len >= 13 && kind[kind.len - 13..kind.len] == "default route";
+        if n >= 4 || !gateway { label.append("not probed"); }
         else {
             var buffer: u8[..4096] = [0; 4096]; var len: i64 = 0;
             if ct_setup_probe(ids[n], 80, buffer, len) != 0 || len <= 0 || len > buffer.len { label.append("no web answer on port 80"); }
