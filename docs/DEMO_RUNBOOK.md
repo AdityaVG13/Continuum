@@ -1,6 +1,6 @@
 # Continuum: Meta-centered demo runbook
 
-**Status: stage script, not an executed run.** The device lifecycle it depends on is proven against the loopback ASUS double, and its onboarding and commissioning parts have run on a physical GT-AX11000 (both firmware branches, outcome `Verified`; lean settings survived a real reboot). What has not happened is this exact stage script with a live Meta measurement — the timings below are presentation targets, and no latency or goodput number is claimed.
+**Status: stage script, not an executed run.** The device lifecycle it depends on is proven against the loopback ASUS double, and its onboarding and commissioning parts have run on a physical GT-AX11000 (both firmware branches, outcome `Verified`; lean settings survived a real reboot). What has not happened is this exact stage script with a live Meta measurement; the timings below are presentation targets, and no latency or goodput number is claimed.
 
 ## 1. Story the audience should understand
 

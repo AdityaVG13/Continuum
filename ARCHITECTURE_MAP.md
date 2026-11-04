@@ -20,7 +20,7 @@ Continuum/
 ## Entry Points
 - **`src/main.goose`**: CLI entrypoint. Modes: default/`--tui` setup, `--discover`, `--discover-model`, `--test-meta`, `--status`, `--sim`, `--daemon`, `--loop [run-id]` (supervised Meta controller + committed validated workload), `--resume <run-id>` (completed-output revalidation), and `router` (operator tuner).
 - **`src/lib.goose`**: Library entry for tests - imports all modules in one place.
-- **`src/setup.goose`**: TUI composition — five sections plus help, pinned status strip with observation age, Result screen, and TUI program actions. `setup_resident_status()` is the single parser for resident status.
+- **`src/setup.goose`**: TUI composition: five sections plus help, pinned status strip with observation age, Result screen, and TUI program actions. `setup_resident_status()` is the single parser for resident status.
 - **`src/device_agent.goose`**: Shared Meta setup, owner dialogue and resident device capabilities; bounded knowledge and on-demand workflow skills. Device reboot consent is separate from standing service-control permission.
 - **`src/leap_main.goose`**: Enrollment capability entrypoint; hands commissioning decisions back to Meta rather than running a cleanup strategy.
 - **Native fallbacks**: `native/fallback_main.cpp`, `native/continuum_native_stub.cpp`

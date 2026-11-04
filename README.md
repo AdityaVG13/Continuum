@@ -3,7 +3,7 @@
 [![release](https://img.shields.io/github/v/release/AdityaVG13/Continuum?color=blue)](https://github.com/AdityaVG13/Continuum/releases)
 [![license](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
-**A network control plane your agent can use — and cannot run away with.**
+**A network control plane your agent can use and cannot run away with.**
 
 One binary on your Mac. It finds the router you physically own, enrolls a
 factory-fresh unit without asking for a password that does not exist, commissions
@@ -17,7 +17,7 @@ granted. Every uncertain effect is reconciled, never replayed.
 
 Built for the Meta Global AI Developer Hackathon (indie track, Push-the-Frontier).
 The claim under test: a model that sees the task *and* the path makes better
-bounded choices than a competent static rule — and the product can prove what it
+bounded choices than a competent static rule, and the product can prove what it
 did without asking the owner to trust the model.
 
 Goose is the primary implementation language; C++ supplies the native transport
@@ -39,7 +39,7 @@ its own key. The MAC is masked.*
 | `p` | binds the router you say you own. Selection grants no write permission. |
 | `n` | enrolls a factory-pending unit: mints the admin credential, stages it in the OS keychain, submits the vendor's first-run form, proves a protected read. |
 | `f` | sets the operations and constraints the model may ever use. Meta can read this policy, never widen it. |
-| `e` | hands the commissioned device to Meta for bounded, reversible setup — with every effect receipted and a way back. |
+| `e` | hands the commissioned device to Meta for bounded, reversible setup, with every effect receipted and a way back. |
 
 The enrollment line is the one people do not believe. A factory-reset GT-AX has
 **no admin password to type**, so Continuum generates one, stores it before the
@@ -57,7 +57,7 @@ file. Vendor wizards do not do this; that is the point.
    independent readback, rollback on drift. A model's claim of success is not
    evidence; the readback is.
 3. **Refusal is a first-class result.** No `tc` on the unit, a vendor-managed
-   root qdisc, an out-of-bounds profile, a rate the device did not honor — each
+   root qdisc, an out-of-bounds profile, a rate the device did not honor: each
    comes back as a typed refusal, not a half-applied network.
 
 ## Prove it yourself
@@ -81,22 +81,22 @@ reason it exists, not because it was written to pass.
 
 ## What works today
 
-- **Enrollment that creates its own credential** — no password to type, staged
+- **Enrollment that creates its own credential.** No password to type, staged
   before the first write, proven by a protected read.
-- **Commissioning you can undo** — private backup, bounded process inventory,
+- **Commissioning you can undo.** Private backup, bounded process inventory,
   allowlisted sharing changes, device-local rollback, exact-prior-flags restore.
   The GT-AX11000 has carried these settings across a real reboot.
-- **Traffic control with a preflight** — read-only `qos-status` decides whether
+- **Traffic control with a preflight.** Read-only `qos-status` decides whether
   the unit can host a qdisc at all; `--device-qos` applies a bounded CAKE profile
   and independently reads back the requested rate; `--device-qos-restore` puts
   the original back.
-- **Evidence or refusal** — `--measure` samples idle and loaded RTT and goodput,
+- **Evidence or refusal.** `--measure` samples idle and loaded RTT and goodput,
   refuses to certify a run it did not sample, and only counts an upload the far
   end actually accepted.
-- **A governor, not a wrapper** — typed tool surface, owner policy in front of
+- **A governor, not a wrapper.** Typed tool surface, owner policy in front of
   every effect, separate owner approval for a reboot, and no credential or shell
   ever handed to the model.
-- **A resident that stays quiet** — healthy monitoring spends zero model calls;
+- **A resident that stays quiet.** Healthy monitoring spends zero model calls;
   setup, dialogue and incidents share one selected-device dispatcher.
 
 <details>
@@ -168,7 +168,7 @@ The ASUS onboarding ceremony has already completed on a physical GT-AX11000 in
 both firmware branches with outcome `Verified`; what remains is the same
 ceremony driven through the shipped CLI path rather than the lab script.
 
-Everything else — the full ledger, including what is still closed — is one row
+Everything else (the full ledger, including what is still closed) is one row
 per capability in [`docs/STATUS.md`](docs/STATUS.md), each with the evidence
 that backs it.
 
@@ -188,8 +188,8 @@ and run `bin/continuum` from the unpacked root, or install it under
 From the checkout root, run `make tui GOOSE=/absolute/path/to/goose`.
 Once built, `.build/continuum` opens the same TUI without a rebuild.
 
-The TUI is organized into five sections — `[1]` Overview, `[2]` Network,
-`[3]` Device, `[4]` Programs, `[5]` Resident — plus `?` help. A pinned strip on
+The TUI is organized into five sections: `[1]` Overview, `[2]` Network,
+`[3]` Device, `[4]` Programs, `[5]` Resident, plus `?` help. A pinned strip on
 every screen answers: what is watched (with observation age, e.g. `just now`),
 which device is selected, what Meta may do under the current permissions, and
 whether the resident is running. Job results render on their own Result screen.
@@ -244,7 +244,7 @@ needed for any of them.
   The launching computer is the execution default, not a remote shell endpoint.
 - **g** / **4** (Programs): inspect installed programs and their execution/reconciliation state
   locally, without a key or model call. `[Enter]` reads a program by id,
-  `[x]` disables, `[E]` enables, `[R]` reconciles — through the same guarded
+  `[x]` disables, `[E]` enables, `[R]` reconciles, through the same guarded
   registry tools the CLI (`--program-*`) and the resident use.
 - **t**: talk to Meta about this host or selected device, requirements and priorities.
   Up to one bounded exchange and a concise model-maintained device note survive
