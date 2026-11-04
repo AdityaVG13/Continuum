@@ -685,6 +685,29 @@ fn leap_call(kind: i64, req_text: const u8[:], out: u8[>..]&) -> i32 {
     return rc;
 }
 
+// A cancelled or timed-out ceremony can leave the unit renamed while this host
+// sits on another network. Before re-probing, try each renamed radio once
+// (5 GHz first); the caller still proves protected access afterwards, so a
+// join alone is never taken as enrollment.
+fn leap_rejoin_renamed(cfg: LeapConfig) -> bool {
+    if !cfg.rejoin || cfg.ssid_stem.len == 0 { return false; }
+    let suffixes: const u8[:][..5] = ["_5G", "_2G", "_5G2", "_6G", ""];
+    var k: i64 = 0;
+    while k < 5 {
+        var ssid: u8[>..] = [];
+        ssid.append(cfg.ssid_stem); ssid.append(suffixes[k]);
+        var req: u8[>..] = [];
+        if ssid.len <= 32 && host_rejoin_request(cfg, ssid, true, 20, req) {
+            var resp: u8[>..] = [];
+            let _ = leap_call(5, req, resp);
+            let j = parse_rejoin_receipt(resp);
+            if j.ok && j.joined { print("leap: rejoined ", ssid, " as ", j.ip); return true; }
+        }
+        k += 1;
+    }
+    return false;
+}
+
 fn fail_report(phase: const u8[:], reason: const u8[:]) -> LeapReport {
     var r = LeapReport {};
     r.phase.append(phase);
@@ -854,16 +877,25 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
     report.reply_cut = appl.reply_cut;
     print("leap: submitted (reply_cut=", appl.reply_cut, ")");
 
-    // Rejoin on the new SSIDs (highest band first), then verify.
+    // Rejoin on the new SSIDs, then verify. The radios restart under the new
+    // names on the unit's own schedule (seen live: minutes on a GT-AX11000), so
+    // poll instead of sleeping a fixed worst case: a name that is not on the air
+    // yet fails in about a second ("Could not find network"), each round tries
+    // every band once (5 GHz first), and the first lease on the router's /24
+    // wins. The round budget scales with radio_wait_sec (45 -> ~4 minutes;
+    // 0 -> one round, for the loopback bench).
     var joined_new = false;
     var old_answers = false;
     if plan.expects_disconnect && cfg.rejoin {
-        print("leap: waiting ", cfg.radio_wait_sec, "s for the radio restart");
-        leap_sleep_ms(cfg.radio_wait_sec * 1000);
-        var bi = appl.new_ssid_count - 1;
-        while bi >= 0 && !joined_new {
-            var attempt: i64 = 0;
-            while attempt < 6 && !joined_new {
+        print("leap: router is restarting its Wi-Fi under the new name");
+        leap_sleep_ms(if cfg.radio_wait_sec < 10 { cfg.radio_wait_sec * 1000 } else { 10000 });
+        let rounds: i64 = if cfg.radio_wait_sec <= 0 { 1 } else { cfg.radio_wait_sec * 6 / 10 };
+        var round: i64 = 0;
+        while round < rounds && !joined_new {
+            print("leap: looking for the renamed Wi-Fi (try ", round + 1, ")");
+            var k: i64 = 0;
+            while k < appl.new_ssid_count && !joined_new {
+                let bi = if appl.new_ssid_count <= 1 { 0 } else { (k + 1) % appl.new_ssid_count };
                 req.clear();
                 if host_rejoin_request(cfg, appl.new_ssids[bi], true, 30, req) {
                     resp.clear();
@@ -875,16 +907,13 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
                         bind = j.ip;
                         report.joined_ssid = appl.new_ssids[bi];
                         report.ip = j.ip;
-                        print("leap: rejoined ", appl.new_ssids[bi],
-                            " as ", j.ip);
+                        print("leap: rejoined ", appl.new_ssids[bi], " as ", j.ip);
                     }
                 }
-                if !joined_new {
-                    leap_sleep_ms(10000);
-                }
-                attempt++;
+                k++;
             }
-            bi--;
+            if !joined_new && round + 1 < rounds { leap_sleep_ms(5000); }
+            round++;
         }
         if !joined_new {
             // Not-applied probe: join an old SSID (open) and ask the unit

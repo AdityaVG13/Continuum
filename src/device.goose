@@ -322,6 +322,11 @@ fn device_enroll(directory: const u8[:], d: DeviceState&, execute: bool) -> bool
     if !device_save(d) { return false; }
     if d.phase == "selected" || d.phase == "enrolling" {
         var observed = device_inventory(d);
+        // A retry after an interrupted ceremony: the unit may already be on the
+        // renamed radio this host has not rejoined. Rejoin, then re-probe.
+        if !observed.authenticated && d.phase == "enrolling" && d.connection.rejoin && leap_rejoin_renamed(d.connection) {
+            observed = device_inventory(d);
+        }
         // A unit that does not answer the staged credential is either factory
         // (no credential works yet) or configured under a different password.
         // Either way the ceremony's first act is a read-only factory login: it

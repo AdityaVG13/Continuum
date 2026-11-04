@@ -871,7 +871,10 @@ fn setup_wizard_step(d: DeviceState, cfg: ModelConfig, bound: bool, key_ok: bool
     // Enrollment is offered until the unit has been seen to be past it: a
     // factory unit gets set up, and a router that is already configured makes
     // the ceremony refuse safely -- which settles this step either way.
-    if !d.runtime_verified && !settled { return 2; }
+    // A durable phase past enrollment settles it too, so a relaunch after a
+    // successful enroll resumes at the key instead of offering enroll again.
+    let pending = d.phase == "selected" || d.phase == "enrolling" || d.phase == "unselected";
+    if !d.runtime_verified && !settled && pending { return 2; }
     // Only commissioning needs Meta, and only with a key the provider has
     // accepted: a bad key fails here, in words, not as an opaque agent error.
     let commissioned = d.phase == "baseline_applied" || d.phase == "reboot_pending" ||
@@ -1069,7 +1072,10 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
         while i < details.len { tail.push(details[i]); i += 1; }
         out.append(tail);
     }
-    if busy && !watching { out.append("\nRunning. q cancels; an uncertain step is never replayed.\n"); }
+    if busy && !watching {
+        if notice.len > 0 { out.append("\n"); out.append(notice); out.append("\n"); }
+        out.append("\nRunning. q cancels; an uncertain step is never replayed.\n");
+    }
     else if notice.len > 0 { out.append("\n"); out.append(notice); out.append("\n"); }
     // The renderer pins the last three lines, so the actions are exactly these.
     out.append("\n");
@@ -1331,6 +1337,7 @@ fn run_setup_tui() -> bool {
     // plugging in a cable or picking the router's Wi-Fi in the menu bar is
     // all the owner does.
     var seeking = false; var seek_next: i64 = 0;
+    var esc_armed = false;
     // Enrollment settles when the ceremony succeeds or when the unit refuses
     // because it is already configured; either way the step is done.
     var settled = false;
@@ -1416,6 +1423,7 @@ fn run_setup_tui() -> bool {
         if !busy {
             // Wizard keys: Enter advances exactly one step; Esc ends the program
             // and a opens the panels. Every step keeps its own confirm frame.
+            if key != 27 && key != 0 && key != 256 && esc_armed { esc_armed = false; notice = []; dirty = true; }
             if wizard && watching {
                 // Waiting for a rebooting router: only quitting is offered.
                 if key == 27 { break; }
@@ -1468,7 +1476,7 @@ fn run_setup_tui() -> bool {
                         if !prepared { notice.append("The router is no longer observed; press a, then d/p."); }
                         else if ct_setup_job_start(job) == 0 {
                             busy = true; details = []; wizard_job = 2;
-                            notice.append("Enrolling. This can take a minute.");
+                            notice.append("Enrolling: 2-5 minutes. The router restarts its Wi-Fi under the new\nname and this Mac rejoins it by itself; Wi-Fi drops meanwhile.");
                         } else { notice.append("Could not start enrollment."); }
                     }
                 } else if wstep == 3 {
@@ -1544,9 +1552,12 @@ fn run_setup_tui() -> bool {
                 dirty = true;
                 }
             } else if wizard && key == 27 {
-                // Esc ends the program. The dense panels are a debugging
-                // surface, not the place you land when leaving setup.
-                break;
+                // Esc ends the program on a second press: one stray Esc on a
+                // failure screen must not throw away the reason shown there.
+                // The panels are a debugging surface, not where leaving lands.
+                if esc_armed { break; }
+                esc_armed = true; dirty = true;
+                notice = []; notice.append("Press Esc again to quit. Progress is saved; `continuum` resumes here.");
             } else if wizard && key == 'p' && step_failed {
                 // Takeover of an already-configured unit: the owner supplies the
                 // admin password the router already uses. It is read hidden,

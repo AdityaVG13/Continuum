@@ -3,6 +3,23 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.1] - 2026-11-04
+
+Fixes from the first physical run on a factory-reset GT-AX11000.
+
+- **Relaunch resumes where you left off.** A router already enrolled is no
+  longer offered enrollment again after restarting `continuum`.
+- **Faster rejoin after enrollment.** Instead of a fixed 45 s wait and six
+  tries per band (highest band first), Continuum polls every band each round,
+  5 GHz first, and moves on the moment the renamed Wi-Fi gives this Mac an
+  address. A retry after an interrupted enrollment rejoins the renamed Wi-Fi
+  before probing the router.
+- **A long step says what it is doing.** The enroll screen states it takes 2-5
+  minutes and that Wi-Fi drops while the router restarts it.
+- **One stray Esc no longer quits.** Esc asks once more; progress is saved.
+- The installer warns when an older `continuum` earlier on `PATH` would shadow
+  the new one.
+
 ## [0.2.0] - 2026-11-04
 
 ### Changed

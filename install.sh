@@ -60,6 +60,13 @@ $SUDO install -m 0755 "$ROOT/bin/continuum" "$PREFIX/bin/continuum"
 
 echo
 "$PREFIX/bin/continuum" --version
+# An older copy earlier on PATH (e.g. ~/.local/bin from a checkout's make
+# install) would shadow this one and run against stale prompts.
+found="$(command -v continuum 2>/dev/null || true)"
+if [ -n "$found" ] && [ "$found" != "$PREFIX/bin/continuum" ]; then
+    echo "Warning: `continuum` currently runs $found ($("$found" --version 2>/dev/null || echo unknown version))."
+    echo "That older copy comes first on your PATH. Remove it, or run $PREFIX/bin/continuum."
+fi
 case ":$PATH:" in
     *":$PREFIX/bin:"*) echo "Installed. Type: continuum" ;;
     *) echo "Installed to $PREFIX/bin/continuum (not on your PATH). Run it with: $PREFIX/bin/continuum" ;;

@@ -952,6 +952,8 @@ def drive_reach(unified, base_env, directory):
         # Wi-Fi control means the enrollment ceremony rejoins the renamed radio.
         assert bound["connection"]["control_rides_wifi"] is True, bound["connection"]
         press(b"\x1b")
+        expect("Press Esc again to quit")
+        press(b"\x1b")
         process.wait(timeout=10)
     finally:
         if process.poll() is None:
@@ -1163,6 +1165,10 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
         identity = subprocess.run(["ps", "-p", str(monitor["pid"]), "-o", "args="],
                                   capture_output=True, text=True).stdout
         assert unified + " --serve" in identity, identity
+        # One stray Esc must not end setup; the second one does.
+        press(b"\x1b")
+        expect("Press Esc again to quit")
+        assert process.poll() is None, "a single Esc must not quit the wizard"
         press(b"\x1b")
         deadline = time.monotonic() + 5
         while process.poll() is None and time.monotonic() < deadline:
