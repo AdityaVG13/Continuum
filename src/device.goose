@@ -466,6 +466,21 @@ fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i6
             if refused.len > 0 { d.reason = refused; }
             else { ok = device_enroll(directory, d, true); }
         }
+    } else if action == "verify" && execute {
+        // Persistence is the device's own proof, never a model conclusion: a
+        // changed boot identity and every owned setting still in force. The
+        // owner's confirmed step is the approval; no owned setting is written.
+        let proof = device_execute(directory, d, "verify", "", true);
+        if proof.receipt.len > 0 { print(proof.receipt); }
+        ok = proof.ok && d.persistence_verified;
+        if !ok {
+            // The adapter's refusal (reboot_not_observed, unreachable...) is the
+            // fact the owner acts on; a generic "unresolved" would hide it.
+            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+            let root, err = json::parse(proof.receipt, doc, decoded);
+            let why, w = json::as_string(json::member(root, "reason"));
+            if w && why.len > 0 && why.len <= 200 { d.reason = why; } else { d.reason = "persistence_unverified"; }
+        }
     } else if action == "qos-status" {
         // Read-only preflight for the optimization effect: proves the qdisc
         // tool is present and reports the current root before any window.

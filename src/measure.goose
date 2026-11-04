@@ -109,6 +109,9 @@ fn measure_cli(directory: const u8[:], target: const u8[:], load_path: const u8[
     receipt.append(",\"evidence\":"); receipt.append(buffer[..n]); receipt.append("}");
     let path_text = str(directory, "/device/measure-", time_ns(), ".json");
     let durable = ct_checkpoint_write(path_text, receipt) == 0;
+    // The path line precedes the receipt so a caller (the wizard) can hand
+    // exactly this artifact to --device-qualify; the last line stays the receipt.
+    if durable { print("MEASURE_EVIDENCE ", path_text); }
     print(receipt);
     if !durable { print("MEASURE_REFUSED evidence_not_durable"); return 1; }
     if verdict != "claimable" { return 1; }

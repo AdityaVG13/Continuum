@@ -412,7 +412,7 @@ fn main() {
     print("       continuum --serve [sample-count] (live monitoring; opt-in Meta uses owner-scoped device capabilities)");
     print("       continuum --discover | --discover-model | --test-meta");
     print("       continuum --device-select <candidate-id> <ssid-stem> [port [--existing-credentials]]");
-    print("       continuum --device-status | --device-step inspect | authorize | enroll --execute | setup [--execute] | restore --execute | reboot --execute");
+    print("       continuum --device-status | --device-step inspect | authorize | enroll --execute | setup [--execute] | verify --execute | restore --execute | reboot --execute");
     print("       continuum --device-mode observer | advisor | operator | takeover (takeover needs a passed drill)");
     print("       continuum --takeover-drill (runs the loop, proves revocation, writes the artifact)");
     print("       continuum --measure host:port/path /loadpath (idle vs loaded RTT, goodput, sample-counted evidence)");

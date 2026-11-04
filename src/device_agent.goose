@@ -202,7 +202,7 @@ fn device_dispatch(directory: const u8[:], d: DeviceState&, response: ModelResul
 }
 // Both model dispatch and admitted straight-line programs enter the same
 // authority/effect boundary. Programs cannot recursively invoke model tools.
-fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:], payload: const u8[:]) -> DeviceToolResult {
+fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:], payload: const u8[:], approved: bool = false) -> DeviceToolResult {
     // No model-supplied approval field is accepted. Reboot authority can only
     // come from the owner's separate policy editor, not a tool argument.
     if operation == "reboot" {
@@ -258,7 +258,9 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
         return DeviceToolResult { receipt: device_view(d, observed), ok: observed.authenticated };
     }
     if !d.setup_approved { return device_tool_rejected("standing_device_permission_required"); }
-    let permitted = owner_admit(operation);
+    // `approved` is only ever set by an owner-confirmed CLI step, never by a
+    // model tool argument or a program.
+    let permitted = owner_admit(operation, 0, approved);
     if permitted.len > 0 { return device_tool_rejected(permitted); }
     if operation == "enroll" {
         if d.phase != "selected" && d.phase != "enrolling" && d.phase != "enrolled" {
