@@ -27,6 +27,48 @@ must earn their resource cost; they are not permission to add another layer of
 bloat. Placement follows the discovered hardware and capabilities rather than
 assuming that every router can host the same runtime.
 
+### Owner-selected ownership modes
+
+The owner decides how far Continuum reaches. Ownership mode is a first-class
+product decision, recorded in state, revocable, and never inferred from a model
+claim. Four modes:
+
+| Mode | Continuum's reach |
+| --- | --- |
+| Observer | Read-only. Builds the architecture model; no effect. |
+| Advisor | Proposes specific changes with evidence; the owner applies them. |
+| Operator | Applies effects only inside owner-scoped capability classes. |
+| Takeover | Continuum is the router's and the network's control plane. |
+
+Takeover is the product's headline capability, and it is not a profiling
+sidecar. In takeover mode Continuum reports: this network is now managed and
+optimized for agentic workflows, vendor bloat removed, and the software running
+the device is itself agentic with Meta in the loop. Concretely that requires:
+
+- a resident Meta-driven control loop (observe, hypothesize, propose, apply,
+  read back, revise policy), not a one-shot assessment;
+- authority over the discovered capability graph rather than a fixed
+  configuration recipe;
+- continuous stewardship: new services, new traffic classes, and new firmware
+  are handled as part of the same loop;
+- the vendor firmware and security-update channel preserved, verified, and
+  monitored; Continuum takes over the control plane, not the patch supply
+  chain;
+- revocation as a tested operation: the pre-takeover baseline restores the
+  device and network to their prior state, and a lost controller link restores
+  it without a human.
+
+Takeover does not mean an unauditable root process. The model owns decisions;
+the runtime owns invariants, bounds, admission and receipts. It also does not
+mean silently replacing vendor firmware on a system that already works; that is
+a separate owner decision with its own consent step.
+
+"Optimized for agentic workflows" is a mode-of-operation claim. Any latency,
+goodput, queue or flow-class number quoted for takeover mode must trace to a
+measured result; a mode name is not a performance claim. The product model
+contains no vendor-specific branches: a device is described by what it exposes,
+not by who made it.
+
 The objective is a very lean, optimized system: identify and remove unnecessary
 bloat across the owned flow, preserve required networking and security, and
 verify the effects rather than equating fewer processes with better performance.

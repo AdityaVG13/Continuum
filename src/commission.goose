@@ -7,12 +7,31 @@ namespace continuum;
 
 extern fn ct_asus_commission_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
 
+// A QoS profile is validated before any device I/O: the caller chooses values,
+// never a shell string. The native adapter rechecks the same bounds.
+struct QosProfile {
+    bandwidth_kbps: i64 = 0,
+    interface_id: u8[..8] = "",
+    mode: u8[..16] = "",
+    overhead_bytes: i64 = 0,
+}
+
+fn commission_authenticated(text: const u8[:]) -> bool {
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(text, doc, decoded);
+    let authenticated, valid_auth = json::as_bool(json::member(root, "authenticated"));
+    if !root || !valid_auth || !authenticated { return false; }
+    return true;
+}
+
+
 fn commission_request(cfg: LeapConfig, action: const u8[:], directory: const u8[:], execute: bool,
         result: u8[>..]&, quiet: bool = false, features: i64 = 31,
         owner_reboot_approved: bool = false) -> bool {
     if action != "inspect" && action != "apply" && action != "restore"
             && action != "authorize" && action != "runtime"
-            && action != "reboot" && action != "verify" {
+            && action != "reboot" && action != "verify" && action != "capabilities" {
         if !quiet { print("COMMISSION_REFUSED unsupported action"); }
         return false;
     }

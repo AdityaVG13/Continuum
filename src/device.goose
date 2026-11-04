@@ -17,6 +17,7 @@ struct DeviceState {
     candidate_id: u8[..64] = "",
     connection: LeapConfig = LeapConfig {},
     phase: u8[..64] = "unselected",
+    ownership: u8[..16] = "observer",
     productid: u8[..64] = "",
     mac: u8[..64] = "",
     firmware: u8[..128] = "",
@@ -37,7 +38,7 @@ struct DeviceObservation {
 
 fn device_record(d: DeviceState) -> u8[>..] {
     var out: u8[>..] = [];
-    out.append("{\"schema_version\":1,\"candidate_id\":"); json::format_string(out, d.candidate_id);
+    out.append("{\"schema_version\":2,\"candidate_id\":"); json::format_string(out, d.candidate_id);
     out.append(",\"connection\":{\"host\":"); json::format_string(out, d.connection.host);
     out.append(",\"port\":"); json::format_int(out, d.connection.port);
     out.append(",\"interface_id\":"); json::format_string(out, d.connection.interface_id);
@@ -50,6 +51,7 @@ fn device_record(d: DeviceState) -> u8[>..] {
     out.append(",\"mac\":"); json::format_string(out, d.mac);
     out.append(",\"firmware\":"); json::format_string(out, d.firmware);
     out.append("},\"phase\":"); json::format_string(out, d.phase);
+    out.append(",\"ownership\":"); json::format_string(out, d.ownership);
     out.append(",\"setup_approved\":"); json::format_bool(out, d.setup_approved);
     out.append(",\"runtime_verified\":"); json::format_bool(out, d.runtime_verified);
     out.append(",\"recovery_verified\":"); json::format_bool(out, d.recovery_verified);
@@ -70,8 +72,8 @@ fn device_load(d: DeviceState&) -> bool {
     if n == 0 { d = DeviceState {}; return true; }
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
     let root, err = json::parse(buffer[..n], doc, decoded);
-    let known: const u8[:][..15] = ["schema_version", "candidate_id", "connection", "identity", "phase",
-        "setup_approved", "runtime_verified", "recovery_verified", "persistence_verified",
+    let known: const u8[:][..16] = ["schema_version", "candidate_id", "connection", "identity", "phase",
+        "ownership", "setup_approved", "runtime_verified", "recovery_verified", "persistence_verified",
         "network_load_verified", "ready", "recovery_directory", "reason", "knowledge", "last_exchange"];
     let conn = json::member(root, "connection"); let identity = json::member(root, "identity");
     let connection_keys: const u8[:][..8] = ["host", "port", "interface_id", "ssid_stem", "admin_user", "admin_ref", "psk_ref", "control_rides_wifi"];
@@ -92,6 +94,18 @@ fn device_load(d: DeviceState&) -> bool {
     let mac, ma = json::as_string(json::member(identity, "mac"));
     let firmware, fi = json::as_string(json::member(identity, "firmware"));
     let phase, ph = json::as_string(json::member(root, "phase"));
+    // Ownership mode is owner-selected state. v1 records predate it and load as
+    // observer; a v2 record must name a mode, so a hand-edited file cannot
+    // silently acquire reach it never had.
+    var ownership: u8[..16] = "observer";
+    if json::member(root, "ownership") {
+        let mode, mo = json::as_string(json::member(root, "ownership"));
+        if !mo || !valid_id(mode, 16) ||
+                (mode != "observer" && mode != "advisor" && mode != "operator" && mode != "takeover") { return false; }
+        ownership = mode;
+    } else if version != 1 {
+        return false;
+    }
     let approved, ap = json::as_bool(json::member(root, "setup_approved"));
     let runtime, rt = json::as_bool(json::member(root, "runtime_verified"));
     let recovery, re = json::as_bool(json::member(root, "recovery_verified"));
@@ -100,7 +114,7 @@ fn device_load(d: DeviceState&) -> bool {
     let ready, rd = json::as_bool(json::member(root, "ready"));
     let directory, di = json::as_string(json::member(root, "recovery_directory"));
     let reason, rs = json::as_string(json::member(root, "reason"));
-    if !v || version != 1 || !c || !h || !p || !i || !s || !u || !a || !k || !w || !pr || !ma || !fi ||
+    if !v || (version != 1 && version != 2) || !c || !h || !p || !i || !s || !u || !a || !k || !w || !pr || !ma || !fi ||
             !ph || !ap || !rt || !re || !pe || !lo || !rd || !di || !rs || load || ready ||
             !valid_id(candidate, 64) || !valid_id(host, 64) || router_prefix(host).len == 0 ||
             !valid_id(iface, 64) || candidate != str(iface, ":", host) || !valid_id(stem, 27) ||
@@ -110,7 +124,7 @@ fn device_load(d: DeviceState&) -> bool {
     }
     if phase != "selected" && phase != "enrolling" && phase != "enrolled" && phase != "commissioning" &&
             phase != "baseline_applied" && phase != "reboot_pending" && phase != "network_qualification_required" { return false; }
-    d = DeviceState { candidate_id: candidate, phase: phase, productid: product, mac: mac, firmware: firmware,
+    d = DeviceState { candidate_id: candidate, phase: phase, ownership: ownership, productid: product, mac: mac, firmware: firmware,
         setup_approved: approved, runtime_verified: runtime, recovery_verified: recovery,
         persistence_verified: persistence, recovery_directory: directory, reason: reason };
     d.connection = LeapConfig { host: host, port: port, interface_id: iface, ssid_stem: stem,
@@ -138,6 +152,32 @@ fn device_open(directory: const u8[:], exclusive: i32) -> bool {
 fn device_saved(directory: const u8[:], d: DeviceState&) -> bool {
     if !device_open(directory, 0) { return false; }
     let ok = device_load(d); ct_device_close(); return ok;
+}
+
+// Takeover is the product's headline mode, so it stays unselectable until the
+// resident loop and the revocation drill exist. Naming a mode is not
+// delivering it, and the state file must not be able to claim reach we cannot
+// yet back with a tested restore.
+fn ownership_selectable(mode: const u8[:]) -> bool {
+    return mode == "observer" || mode == "advisor" || mode == "operator";
+}
+
+fn device_set_mode(directory: const u8[:], mode: const u8[:]) -> const u8[:] {
+    if mode != "observer" && mode != "advisor" && mode != "operator" && mode != "takeover" {
+        return "unknown_ownership_mode";
+    }
+    if !ownership_selectable(mode) {
+        return "takeover_unavailable_resident_loop_and_revocation_drill_required";
+    }
+    if !device_open(directory, 1) { return "device_state_unavailable"; }
+    var d = DeviceState {};
+    if !device_load(d) { ct_device_close(); return "device_state_invalid"; }
+    if d.candidate_id.len == 0 { ct_device_close(); return "device_not_selected"; }
+    d.ownership = mode;
+    let saved = device_save(d);
+    ct_device_close();
+    if !saved { return "device_result_not_durable"; }
+    return "";
 }
 
 fn device_select(directory: const u8[:], observed: const u8[:], candidate: const u8[:],

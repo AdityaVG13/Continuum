@@ -1013,6 +1013,11 @@ int32_t commission_dispatch(ct_bytes req, ct_output out, int64_t *out_len) {
             "{\"phase\":\"inventory\",\"authenticated\":true,\"commissioned\":false,"
             "\"runtime_verified\":false,\"persistence_verified\":false,"
             "\"recovery_verified\":false,\"settings\":" + commission_object(current) + "}");
+    if (action == "capabilities")
+        return commission_emit(out, out_len,
+            "{\"phase\":\"capabilities\",\"authenticated\":true,\"commissioned\":false,"
+            "\"identity\":" + commission_identity(current) +
+            ",\"capabilities\":" + commission_capabilities(current) + "}");
     return commission_execute(s, body, action, user, password, ref, current, out, out_len);
 }
 #endif

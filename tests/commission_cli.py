@@ -252,6 +252,30 @@ def main():
             assert inspected.returncode == 0, "an enrolled router must be adopted by protected inspection, not QIS replay: " + inspected.stdout
             adopted = json.loads(state_path.read_text())
             assert adopted["phase"] == "enrolled" and adopted["identity"]["productid"] == "RT-TEST"
+            # The owner selects how far Continuum reaches, and a mode that is
+            # not yet backed by a resident loop and a tested revocation cannot
+            # be selected at all.
+            takeover = subprocess.run([unified, "--device-mode", "takeover"], env=integrated_env,
+                                      capture_output=True, text=True, timeout=10)
+            assert takeover.returncode != 0 and "takeover_unavailable" in takeover.stdout, takeover.stdout
+            assert json.loads(state_path.read_text()).get("ownership", "observer") == "observer", (
+                "a refused mode change must not alter recorded ownership")
+            selected_mode = subprocess.run([unified, "--device-mode", "operator"], env=integrated_env,
+                                           capture_output=True, text=True, timeout=10)
+            assert selected_mode.returncode == 0, selected_mode.stdout + selected_mode.stderr
+            assert json.loads(state_path.read_text())["ownership"] == "operator"
+            # A v1 state file predates ownership and must load as observer
+            # rather than fail: migration may never erase a device binding.
+            legacy = json.loads(state_path.read_text())
+            legacy["schema_version"] = 1
+            legacy.pop("ownership", None)
+            state_path.write_text(json.dumps(legacy))
+            status = subprocess.run([unified, "--device-status"], env=integrated_env,
+                                    capture_output=True, text=True, timeout=10)
+            assert status.returncode == 0 and '"ownership":"observer"' in status.stdout, (
+                "a v1 state file must migrate to observer, not reject the binding: " + status.stdout)
+            assert subprocess.run([unified, "--device-mode", "operator"], env=integrated_env,
+                                  capture_output=True, text=True, timeout=10).returncode == 0
             denied = subprocess.run([unified, "--device-step", "setup"], env=integrated_env,
                                     capture_output=True, text=True, timeout=10)
             assert denied.returncode != 0 and read_device() == before, "setup needs explicit standing permission before any write"
@@ -475,6 +499,7 @@ def main():
             assert report["status"] == "completed" and report["model_calls"] == 5
             pending = json.loads(state_path.read_text())
             assert pending["phase"] == "baseline_applied" and pending["setup_approved"]
+            assert pending["ownership"] == "operator", "owner-selected reach must survive the whole lifecycle"
             assert pending["runtime_verified"] and pending["recovery_verified"] and not pending["persistence_verified"]
             assert read_device()["enable_samba"] == "0" and read_device()["enable_ftp"] == "1", "only the model-selected service may change"
             assert (proc / "sys/kernel/random/boot_id").read_text() == boot_before_setup, "neither standing setup nor a model reboot request grants reboot authority"
