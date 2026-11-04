@@ -25,15 +25,13 @@ boundaries and the fallback path. Reasoning comes from Meta's `muse-wonder-1.0`
 through the Responses API: every call is bounded by model, token and call caps,
 and healthy operation spends none.
 
-## The demo, in five keys
+![The Device screen on a real GT-AX11000](docs/images/continuum-device.png)
 
-```console
-$ continuum --tui
- CONTINUUM - OVERVIEW            META NOT CONFIGURED
- [1] Overview   [2] Network   [3] Device   [4] Programs   [5] Resident
- WATCHING no observation yet - [d] Discover | SELECTED en0:192.168.50.1
- PERMISSION enroll,runtime,apply,restore,verify | RESIDENT not running
-```
+*The Device screen on a real unit: identity read from the router, lifecycle
+gates unclosed until each is actually verified, every disruptive action behind
+its own key. The MAC is masked.*
+
+## The demo, in five keys
 
 | key | what happens |
 | --- | --- |
@@ -197,6 +195,11 @@ which device is selected, what Meta may do under the current permissions, and
 whether the resident is running. Job results render on their own Result screen.
 `j/k`/arrow keys scroll, `J/K` and `PgUp/PgDn` page; `q` cancels a running job
 and quits. While busy, only `q` works and the footer says so.
+
+![The Overview screen before a Meta key is set](docs/images/continuum-overview.png)
+
+*First run with no key: the screen states what to do next and what it will not
+do, and the permission strip shows the device grant as it stands.*
 
 First run advances in four steps: discover this host's network, select the
 device you own, enroll a factory-pending unit (the program creates the admin
@@ -431,6 +434,7 @@ locally (`docs/progress/`) and is not published.
 | `docs/DEMO_RUNBOOK.md` | Three-minute stage sequence and required live proof. |
 | `docs/IMPLEMENTATION_MAP.md`, `docs/LAB.md` | Source-to-capability map; what the lab proves and does not. |
 | `docs/prompts/`, `schemas/`, `config/`, `fixtures/` | Controller/workload/device/discovery prompts, wire contracts, example configs, synthetic fixtures. |
+| `docs/images/` | Terminal captures used by this README, rendered with VHS at a fixed grid. |
 | `src/` | Goose implementation: sim, guardian, actuator, tool binding, Meta provider, onboarding planner + leap ceremony. |
 | `src/main.build`, `tests/*.build` | Toolchain sidecars linking the native sources into each binary. |
 | `native/` | C ABI (`continuum_native.h`), router HTTP backend, Meta HTTPS adapter, ASUS onboarding adapter, macOS keychain/Wi-Fi host backend, C++ fallback stubs. |
