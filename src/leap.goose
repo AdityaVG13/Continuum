@@ -730,6 +730,13 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
     resp.clear();
     var rc = leap_call(0, req, resp);
     if rc != 0 {
+        if rc == -4 {
+            // The unit answered the normal login page instead of the first-run
+            // wizard: it already has an admin password, so the factory login is
+            // refused. Saying "refused (auth, scope...)" here hides the one fact
+            // the owner needs.
+            return fail_report("discover", "router is already set up: it refused the factory login (its setup wizard is closed). Enrollment only works on a factory unit.");
+        }
         return fail_report("discover", leap_reason(rc));
     }
     let disc = parse_discover_receipt(resp);

@@ -81,7 +81,7 @@ monitor_path = Path(ENV["XDG_CONFIG_HOME"]) / "continuum/service/status.json"
 try:
     expect("STEP 1 OF 8")
     check(b"CONTINUUM / SETUP" in output, "first run opens the setup wizard, not a menu")
-    os.write(master, b"\x1b")
+    os.write(master, b"a")
     expect("[m] Meta")
     check(not (termios.tcgetattr(slave)[3] & termios.ECHO), "interactive UI disables terminal echo")
     os.write(master, b"m")
@@ -230,7 +230,7 @@ process = subprocess.Popen([BIN, "--tui"], stdin=slave, stdout=slave, stderr=sla
 output = bytearray()
 try:
     expect("STEP 1 OF 8")
-    os.write(master, b"\x1b")
+    os.write(master, b"a")
     expect("[3] Device")
     check(b"DEVICE / LIFECYCLE" in output and b"unselected" in output,
           "first run lands on the device lifecycle, not a menu, and binds nothing")
@@ -330,7 +330,7 @@ if fixture.exists():
     output = bytearray()
     try:
         expect("STEP 1 OF 8")
-        os.write(master, b"\x1b")
+        os.write(master, b"a")
         expect("[m] Meta")
         check(b"not configured" in output.lower(), "new sessions show missing credentials, not a false connected state")
         os.write(master, b"a")

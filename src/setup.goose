@@ -472,7 +472,8 @@ fn setup_wizard_step(d: DeviceState, cfg: ModelConfig, bound: bool, rebooted: bo
     return 0;
 }
 fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
-        rebooted: bool, tuned: bool, settled: bool, details: const u8[:], notice: const u8[:], busy: bool) {
+        rebooted: bool, tuned: bool, settled: bool, details: const u8[:], notice: const u8[:], busy: bool,
+        failed: bool, show_raw: bool) {
     var d = DeviceState {};
     let bound = device_saved(setup_directory(), d) && d.candidate_id.len > 0;
     let step = setup_wizard_step(d, cfg, bound, rebooted, tuned, settled);
@@ -494,7 +495,7 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     if step == 1 {
         let gateway = setup_gateway_candidate(network);
         out.append("Continuum found this host's default-route router:\n\n  ");
-        out.append(if gateway.len > 0 { gateway } else { "none, or several -- press Esc and use p" });
+        out.append(if gateway.len > 0 { gateway } else { "none, or several -- press a, then p" });
         out.append("\n\nBinding records the target only. No credential is created\nand nothing is written to the router yet.\n");
     } else if step == 2 {
         out.append("Creates this router's admin credential, renames its Wi-Fi and\nrotates the passphrase. This host may drop off Wi-Fi and rejoin.\n\nIf the router is already set up the ceremony refuses safely: it is\nfactory-only, and nothing on the router changes.\n");
@@ -515,7 +516,33 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     }
     out.append(str("\nRouter  ", if bound { d.candidate_id } else { "none bound" }, "\nPhase   ", d.phase,
         "\nKey     ", if meta_credentials_available(cfg) { "configured" } else { "missing" }, "\n"));
-    if details.len > 0 {
+    if failed {
+        // A refusal is a fact the owner has to act on, not a JSON wall.
+        out.append("\nWHY IT STOPPED\n  ");
+        out.append(if d.reason.len > 0 { d.reason } else { "the step was refused; no detail was recorded" });
+        out.append("\n\nWHAT TO DO\n");
+        if setup_contains(d.reason, "already set up") {
+            out.append("  Hold the router's RESET button for about 10 seconds, until its\n");
+            out.append("  LEDs blink, then let it come back and press Enter here again.\n");
+            out.append("  Until you do, the unit keeps the admin password it has now.\n");
+        } else if setup_contains(d.reason, "secured bands") {
+            out.append("  This unit is already configured. Press Enter to go on with the\n");
+            out.append("  credential Continuum already holds for it.\n");
+        } else if setup_contains(d.reason, "unreachable") || setup_contains(d.reason, "transport") {
+            out.append("  Check the link to the router (cable or Wi-Fi), then press Enter\n");
+            out.append("  to try this step again.\n");
+        } else {
+            out.append("  Press Enter to retry this step. If it fails the same way, press\n");
+            out.append("  i and share the raw output.\n");
+        }
+        if show_raw && details.len > 0 {
+            out.append("\nRAW OUTPUT (i hides this)\n");
+            var raw_tail: u8[>..] = [];
+            var ri: i64 = if details.len > 900 { details.len - 900 } else { 0 };
+            while ri < details.len { raw_tail.push(details[ri]); ri += 1; }
+            out.append(raw_tail);
+        }
+    } else if details.len > 0 {
         out.append("----- last step -----\n");
         var tail: u8[>..] = [];
         var i: i64 = if details.len > 600 { details.len - 600 } else { 0 };
@@ -526,7 +553,8 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     else if notice.len > 0 { out.append("\n"); out.append(notice); out.append("\n"); }
     // The renderer pins the last three lines, so the actions are exactly these.
     out.append("\n");
-    if step == 1 { out.append("[Enter] Bind this router\n"); }
+    if failed { out.append("[Enter] Retry this step    [i] Raw output\n"); }
+    else if step == 1 { out.append("[Enter] Bind this router\n"); }
     else if step == 2 { out.append("[Enter] Enroll this router\n"); }
     else if step == 3 { out.append("[Enter] Enter the Meta key\n"); }
     else if step == 4 { out.append("[Enter] Let Meta set it up\n"); }
@@ -534,8 +562,8 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     else if step == 6 { out.append("[Enter] Verify persistence\n"); }
     else if step == 7 { out.append("[Enter] Let Meta tune it\n"); }
     else if step == 8 { out.append("[Enter] Re-check the gates\n"); }
-    else { out.append("[Enter] Re-check\n"); }
-    out.append("[Esc] Leave setup for the panels\n");
+    else { out.append("[Enter] Re-check the gates\n"); }
+    out.append("[Esc] Quit    [a] Advanced panels\n");
     let names: const u8[:][..8] = ["BIND", "ENROLL", "KEY", "SETUP", "REBOOT", "VERIFY", "TUNE", "MEASURE"];
     var i2: i64 = 0;
     while i2 < 8 {
@@ -757,6 +785,9 @@ fn run_setup_tui() -> bool {
     var wizard = !(startup_bound && startup_ready);
     if wizard { notice = []; }
     var rebooted = false; var tuned = false; var wizard_job: i64 = 0;
+    // A failed step is explained in words on the same screen; raw output is
+    // opt-in (i), never the default.
+    var step_failed = false; var show_raw = false;
     // Enrollment settles when the ceremony succeeds or when the unit refuses
     // because it is already configured; either way the step is done.
     var settled = false;
@@ -766,7 +797,8 @@ fn run_setup_tui() -> bool {
         if dirty {
             var wframe: u8[>..] = [];
             if wizard {
-                setup_wizard_body(wframe, cfg, network, rebooted, tuned, settled, details, notice, busy);
+                setup_wizard_body(wframe, cfg, network, rebooted, tuned, settled, details, notice, busy,
+                    step_failed, show_raw);
                 ct_setup_draw(wframe, 0); dirty = false;
             } else {
             var frame: u8[>..] = [];
@@ -823,12 +855,13 @@ fn run_setup_tui() -> bool {
             // the panels. Every step keeps its own confirm frame.
             if wizard && (key == 13 || key == 10) {
                 notice = [];
+                step_failed = false; show_raw = false;
                 var wd = DeviceState {};
                 let wbound = device_saved(setup_directory(), wd) && wd.candidate_id.len > 0;
                 let wstep = setup_wizard_step(wd, cfg, wbound, rebooted, tuned, settled);
                 if wstep == 1 {
                     let gateway = setup_gateway_candidate(network);
-                    if gateway.len == 0 { notice.append("No single default-route router; press Esc, then p."); }
+                    if gateway.len == 0 { notice.append("No single default-route router; press a, then p."); }
                     else if !confirm_bind(gateway) { notice.append("Binding cancelled; target unchanged."); }
                     else if !device_select(setup_directory(), network, gateway, "Continuum", 80, false) {
                         notice.append("Binding refused or the router is no longer observed.");
@@ -839,11 +872,13 @@ fn run_setup_tui() -> bool {
                     if wd.connection.ssid_stem.len > 0 { stem = wd.connection.ssid_stem; }
                     if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
                     else {
-                        var prepared = true;
-                        if wd.phase != "selected" {
-                            prepared = device_select(setup_directory(), network, wd.candidate_id, stem, wd.connection.port, false);
-                        }
-                        if !prepared { notice.append("The router is no longer observed; press Esc and use d/p."); }
+                        // Re-bind the same candidate against the credential
+                        // Continuum already holds for this address instead of
+                        // minting a new empty slot. If that credential no longer
+                        // answers (a real reset), enrollment runs anyway and
+                        // stages into the same slot.
+                        let prepared = device_select(setup_directory(), network, wd.candidate_id, stem, wd.connection.port, true);
+                        if !prepared { notice.append("The router is no longer observed; press a, then d/p."); }
                         else if ct_setup_job_start(job) == 0 {
                             busy = true; details = []; wizard_job = 2;
                             notice.append("Enrolling. This can take a minute.");
@@ -856,7 +891,7 @@ fn run_setup_tui() -> bool {
                         else { "Key entry cancelled or rejected; previous key unchanged." });
                 } else if wstep == 4 || wstep == 6 || wstep == 7 {
                     job = []; job.append("device-setup");
-                    if !meta_credentials_available(cfg) { notice.append("The Meta key is missing; press Esc, then m."); }
+                    if !meta_credentials_available(cfg) { notice.append("The Meta key is missing; press a, then m."); }
                     else if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
                     else if ct_setup_job_start(job) == 0 {
                         busy = true; details = []; wizard_job = wstep;
@@ -871,11 +906,17 @@ fn run_setup_tui() -> bool {
                     } else { notice.append("Could not start the reboot."); }
                 } else {
                     notice.append(if wstep == 8 { "Run the two commands above, then press Enter again." }
-                        else { "Every gate is earned; press Esc for the panels." });
+                        else { "Every gate is earned; press a for the panels." });
                 }
                 dirty = true;
             } else if wizard && key == 27 {
-                wizard = false; notice = []; details = []; dirty = true;
+                // Esc ends the program. The dense panels are a debugging
+                // surface, not the place you land when leaving setup.
+                break;
+            } else if wizard && key == 'a' {
+                wizard = false; notice = []; details = []; step_failed = false; show_raw = false; dirty = true;
+            } else if wizard && key == 'i' && step_failed {
+                show_raw = !show_raw; dirty = true;
             }
             // Numbered sections are the primary navigation; legacy letters stay.
             else if key >= '1' && key <= '5' {
@@ -1026,7 +1067,9 @@ fn run_setup_tui() -> bool {
             let result = ct_setup_job_poll(output, n);
             if result != 1 {
                 busy = false; dirty = true; notice = [];
-                notice.append(if result == 0 { "Requested job completed." } else { "Job failed; inspect details. No automatic retry." });
+                // The wizard explains a refusal in words on its own screen;
+                // a second generic line would only add noise.
+                if !wizard { notice.append(if result == 0 { "Requested job completed." } else { "Job failed; inspect details. No automatic retry." }); }
                 if n > 0 && n <= output.len {
                     if job == "discover" && result == 0 { screen = 1; network = []; network.append(output[..n]); observed_wall_ms = time_ns() / 1000000; }
                     else if job.len >= 7 && job[..7] == "device-" {
@@ -1037,6 +1080,8 @@ fn run_setup_tui() -> bool {
                             // Stay in the wizard: the receipt is evidence, the
                             // next step is already computed from device state.
                             screen = 2;
+                            step_failed = result != 0;
+                            show_raw = false;
                             details = [];
                             details.append(if result == 0 { "STEP COMPLETE\n\n" } else { "STEP FAILED\n\n" });
                             details.append(output[..n]);
