@@ -85,6 +85,15 @@ see "Claim discipline" below.
 
 ## Quickstart
 
+### Install a release
+
+macOS arm64 archives are published under
+[Releases](https://github.com/AdityaVG13/Continuum/releases). The binary opens
+`docs/prompts`, `schemas` and `fixtures/corpus` by relative path, so unpack it
+and run `bin/continuum` from the unpacked root, or install it under
+`~/.local/share/continuum` with a launcher on `PATH` as the archive's
+`INSTALL.txt` describes. Confirm the build with `continuum --version`.
+
 ### Interactive setup
 
 From the checkout root, run `make tui GOOSE=/absolute/path/to/goose`.
