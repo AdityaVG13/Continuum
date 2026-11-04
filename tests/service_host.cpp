@@ -26,7 +26,18 @@ extern "C" int32_t ct_discover_full(ct_bytes, ct_output out, int64_t *length) {
     std::memcpy(out.data, body.data(), body.size()); *length = static_cast<int64_t>(body.size());
     return CT_OK;
 }
-extern "C" int32_t ct_discover_probe(ct_bytes, int64_t, ct_output, int64_t *) { return CT_REJECTED; }
+// "wifi": the factory router answers as an ASUS once the host is on its
+// network, so the wizard marks it and Enter binds it.
+extern "C" int32_t ct_discover_probe(ct_bytes, int64_t, ct_output out, int64_t *length) {
+    const char *fixture = std::getenv("CONTINUUM_DEVICE_FIXTURE");
+    const char *joined = std::getenv("CT_TEST_WIFI_JOINED");
+    if (!fixture || std::strcmp(fixture, "wifi") != 0 || !joined || access(joined, F_OK) != 0) return CT_REJECTED;
+    const std::string body = "{\"candidate_id\":\"lo0:127.0.0.1\",\"port\":80,\"http_status\":200,"
+        "\"title\":\"ASUS Login\",\"vendor\":\"asus\",\"authenticated\":false}";
+    if (!length || !out.data || out.capacity < static_cast<int64_t>(body.size())) return CT_BUFFER_TOO_SMALL;
+    std::memcpy(out.data, body.data(), body.size()); *length = static_cast<int64_t>(body.size());
+    return CT_OK;
+}
 extern "C" int32_t ct_host_sample(ct_output out, int64_t *length) {
     static int sample = 0;
     // A stable baseline, a changed route, two healthy intervals to rearm,

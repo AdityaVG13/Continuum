@@ -53,29 +53,21 @@
 <span class="dim">--------------------------------------------------------------</span>
 <span class="hi">STEP 1 OF 8   BIND THE ROUTER</span>
 
-No router is in reach of this Mac yet. Any router, any link:
+Looking for your router...
 
-  Cable   plug this Mac into one of the router's LAN ports, then Enter
-  Wi-Fi   press w and type the router's network name. A factory-reset
-          router broadcasts an open setup network (name on its label)
+Connect this Mac to the router any way you like:
+  - plug a cable into one of its LAN ports, or
+  - pick its Wi-Fi in the menu bar. A reset ASUS shows ASUS_XX
+    (open, no password).
+Continuum notices by itself; there is nothing to type here.
 
 <span class="dim">Nothing has been written anywhere.</span>
 
 Router  none bound   Phase  unselected   Key  missing
 
-<span class="hd">[w] Join a Wi-Fi network    [Enter] Look again</span>
+<span class="hd">Waiting for the router; it appears here on its own.</span>
 <span class="dim">[Esc] Quit    [a] Advanced panels</span>
 <span class="dim"></span><span class="hd">[BIND]</span><span class="dim">  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
-
-    join: `<span class="hd">CONTINUUM / JOIN WI-FI</span>
-<span class="dim">--------------------------------------------------------------</span>
-Network  <span class="hi">ASUS_5C</span>   on en0
-
-Is it open (a factory-reset router's setup network) or protected?
-This Mac leaves its current Wi-Fi network to join it.
-
-<span class="hd">[o] Open network    [p] Enter its password</span>
-<span class="dim">[Esc] Cancel; nothing changes</span>`,
 
     reach: `<span class="hd">CONTINUUM / SETUP</span>
 <span class="dim">--------------------------------------------------------------</span>
@@ -86,14 +78,12 @@ Routers this Mac can reach:
 <span class="hi">> 1  en0:192.168.50.1</span>   (Wi-Fi, default route)
      <span class="ok">ASUS router -- supported</span>
 
-<span class="dim">Binding records the target only. No credential is created
-and nothing is written to the router yet.</span>
+<span class="dim">Enter takes over the marked router. This step records the target
+only; nothing is written to the router yet.</span>
 
 Router  none bound   Phase  unselected   Key  missing
 
-<span class="ok">Joined ASUS_5C; this Mac is 192.168.50.23 on it.</span>
-
-<span class="hd">[Enter] Bind the marked router    [1-9] Another    [w] Wi-Fi</span>
+<span class="hd">[Enter] Take over this router</span>
 <span class="dim">[Esc] Quit    [a] Advanced panels</span>
 <span class="dim"></span><span class="hd">[BIND]</span><span class="dim">  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
 
@@ -274,8 +264,7 @@ Router  en0:192.168.50.1   Phase  ready   Key  verified
 
   const TUI_CUES = [
     { t: 50, id: "noRouter" },
-    { t: 60, id: "join" },
-    { t: 65, id: "reach" },
+    { t: 63, id: "reach" },
     { t: 74, id: "enroll" },
     { t: 87, id: "takeover" },
     { t: 95, id: "picker" },

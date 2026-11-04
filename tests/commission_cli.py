@@ -890,12 +890,12 @@ def main():
 
 
 def drive_reach(unified, base_env, directory):
-    """Nothing in reach -> join the router's Wi-Fi by name -> bind by number.
+    """Nothing in reach -> the owner joins the router's Wi-Fi -> one Enter.
 
-    A factory-reset router is only an open setup network: the wizard must get
-    from "no router" to a durable Wi-Fi binding without the panels or a CLI.
-    The fake host records the join request; discovery shows the router only
-    after that join happened.
+    A factory-reset router is only an open setup network. The owner joins it
+    from the menu bar (simulated by creating the marker the fake host reads);
+    the wizard must notice on its own, with no keystroke, mark the router and
+    bind it on a single Enter.
     """
     import fcntl
     import pty
@@ -938,20 +938,13 @@ def drive_reach(unified, base_env, directory):
 
     try:
         expect("STEP 1 OF 8")
-        expect("No router is in reach")
-        expect("[w] Join a Wi-Fi network")
-        assert not joined.exists()
-        press(b"w")
-        expect("Wi-Fi network name")
-        press(b"ASUS_5C\r")
-        expect("[o] Open network")
-        press(b"o")
-        expect("Routers this Mac can reach", 30)
-        expect("Joined ASUS_5C")
-        request = json.loads(joined.read_text())
-        assert request["ssid"] == "ASUS_5C" and request["psk_ref"] == "" and request["interface"] == "lo0", request
-        press(b"1")
-        expect("CONTINUUM / BIND THIS ROUTER")
+        expect("Looking for your router")
+        expect("nothing to type here")
+        # The menu-bar join: discovery and the probe now see an ASUS router.
+        joined.write_text("{}")
+        expect("Routers this Mac can reach", 15)
+        expect("ASUS router -- supported")
+        expect("[Enter] Take over this router")
         press(b"\r")
         expect("STEP 2 OF 8")
         bound = json.loads((config / "device/state.json").read_text())

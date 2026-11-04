@@ -56,8 +56,8 @@ keystroke by keystroke against the double in `make device-check`
 (`tests/commission_cli.py`, `WIZARD_REACH_GREEN`, `WIZARD_LIFECYCLE_GREEN`);
 none of it has run on the physical unit yet.
 
-Install once from the checkout: `make install` (binary in `~/.local/bin`,
-prompts/schemas in `~/.local/share/continuum`). Have ready: the Meta key, your
+Install once: `curl -fsSL https://github.com/AdityaVG13/Continuum/releases/latest/download/install.sh | sh`
+(binary in `/usr/local/bin`, prompts/schemas in `/usr/local/share/continuum`). Have ready: the Meta key, your
 line's upload bandwidth in kbit/s, and -- for step 8 only -- a far-end HTTP
 server reached through the WAN that answers `GET` on a probe path and accepts
 `POST` uploads (e.g. `/ping`, `/bulk`). A terminal of 100x40 or more keeps
@@ -65,28 +65,27 @@ receipt lines unclipped.
 
 How the Mac reaches the router does not matter:
 
-| Situation | What step 1 shows | Keys |
+| Situation | What you do | What step 1 shows |
 | --- | --- | --- |
-| Cable to a LAN port (any state) | `Routers this Mac can reach`, the router marked `>` | `Enter`, `Enter` |
-| On the router's existing Wi-Fi | same, `(Wi-Fi, default route)` | `Enter`, `Enter` |
-| Factory-reset router, Mac on no network | `No router is in reach` | `w`, setup network name (ASUS: `ASUS_XX` plus a band suffix such as `_2G`, XX = last MAC digits on the label; check the Mac's Wi-Fi menu), `Enter`, `o`; then `1`, `Enter` |
-| Mac on another network, router only on its own Wi-Fi | the other router only | `w`, name, `Enter`, `o` (open) or `p` + password; then its number, `Enter` |
-| Several routers (cable + Wi-Fi) | numbered list, each labelled by what answers on it | its number, `Enter` |
+| Cable to a LAN port, or already on the router's Wi-Fi | nothing | `Routers this Mac can reach`, the router marked `>` |
+| Factory-reset router, Mac on no network or another one | pick the router's Wi-Fi in the menu bar (ASUS: `ASUS_XX`, open) | `Looking for your router`, then the router marked `>` within a few seconds |
+| Cable to the ISP gateway and Wi-Fi on the router | nothing | both gateways; only the supported router is marked |
 
-macOS hides scanned Wi-Fi names from unsigned tools, so the owner types the
-name; the join itself (and the DHCP lease) is checked by Continuum. Each row is
-labelled `ASUS router -- supported`, `<vendor> router -- no Continuum backend
-yet`, or `no web answer on port 80`; only ASUS has a backend today.
+Step 1 keeps looking on its own every two seconds; there is nothing to type.
+Each gateway is labelled `ASUS router -- supported`, `<vendor> router -- no
+Continuum backend yet`, or `no web answer on port 80`; only ASUS has a backend
+today, and only a supported router is ever marked. macOS hides Wi-Fi names from
+command-line tools, which is why the join is a menu-bar click.
 
 | Step | Keys | You should see | Stop if |
 | --- | --- | --- | --- |
-| start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` (table above) | the GT-AX is not listed after `Enter` (look again) |
-| 1 BIND | see table | `STEP 2 OF 8` (nothing written to the router) | |
+| start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` (table above) | the GT-AX is never marked |
+| 1 BIND | `Enter` | `STEP 2 OF 8` (nothing written to the router) | |
 | 2 ENROLL, factory unit | `Enter`, `Enter` | about a minute, then `STEP 3 OF 8`; Wi-Fi renamed to the stem, the Mac rejoins it by itself | any other `WHY IT STOPPED` |
 | 2 ENROLL, configured unit | `Enter`, `Enter`, then `p`, admin password, `Enter` | `WHY IT STOPPED ... already set up`, then `Password accepted` and `STEP 3 OF 8`; zero writes | the password is refused twice |
-| 3 KEY | `Enter`, key, `Enter`, `y` or `n` (Keychain) | `CHOOSE THE META MODEL`: the models this key can use, with Meta's prices | `refused this key while listing`: `k` enters another |
+| 3 KEY | `Enter`, key, `Enter`, `Enter` (saves it in the Keychain; `n` = this session only) | `CHOOSE THE META MODEL`: the models this key can use, with Meta's prices | `refused this key while listing`: `k` enters another |
 | 3 MODEL | `Enter` keeps the marked `muse-spark-1.3` (or a number) | `REASONING EFFORT` with the cap and step bound per level | |
-| 3 EFFORT | a number (`5` = xhigh), `Enter`, `Enter` | one connection-test call, then `STEP 4 OF 8` and `Key  verified` | the test is refused |
+| 3 EFFORT | `Enter` keeps the marked xhigh (or a number), `Enter` | one connection-test call, then `STEP 4 OF 8` and `Key  verified` | the test is refused |
 | 4 SETUP | `Enter`, `Enter` | Meta works (bounded calls), then `STEP 5 OF 8` with `RECEIPT    baseline applied; runtime and recovery verified by the router` | `WHY IT STOPPED` (Meta finishing without a verified baseline counts as a failure) |
 | 5 REBOOT | `Enter`, `Enter` | `WAITING FOR THE ROUTER`, `Went down   yes`, then `The router stopped answering and is back` | `the router has not answered for 10 minutes` |
 | 6 VERIFY | `Enter`, `Enter` | `PERSIST    verified by the router` and `STEP 7 OF 8`; no model call | `reboot_not_observed`: power-cycle the unit, then `Enter` |

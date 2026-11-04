@@ -685,27 +685,6 @@ fn leap_call(kind: i64, req_text: const u8[:], out: u8[>..]&) -> i32 {
     return rc;
 }
 
-// Owner-requested association, outside any ceremony: join a named Wi-Fi
-// network (open when psk_ref is empty, e.g. a factory-reset router's setup
-// network) and require a DHCP lease on it. Receipt ip is the lease.
-fn host_join_wifi(iface: const u8[:], ssid: const u8[:], psk_ref: const u8[:], ip: u8[>..]&) -> bool {
-    if ssid.len == 0 || ssid.len > 32 || iface.len == 0 || iface.len > 15 { return false; }
-    var req: u8[>..] = [];
-    req.append("{\"interface\":"); json::format_string(req, iface);
-    req.append(",\"ssid\":"); json::format_string(req, ssid);
-    req.append(",\"psk_ref\":"); json::format_string(req, psk_ref);
-    req.append(",\"prefix\":\"\",\"wait_sec\":45}");
-    var out: u8[>..] = [];
-    let rc = leap_call(5, req, out);
-    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
-    let root, err = json::parse(out, doc, decoded);
-    let joined, j = json::as_bool(json::member(root, "joined"));
-    let lease, l = json::as_string(json::member(root, "ip"));
-    if rc != 0 || !root || !j || !joined || !l || lease.len == 0 { return false; }
-    ip.append(lease);
-    return true;
-}
-
 fn fail_report(phase: const u8[:], reason: const u8[:]) -> LeapReport {
     var r = LeapReport {};
     r.phase.append(phase);

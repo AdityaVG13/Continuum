@@ -277,14 +277,20 @@ int32_t ct_tui_key_setup() {
     int rc = edit("MODEL_API_KEY", "", true, value);
     if (rc != CT_OK) return rc;
 #if defined(__APPLE__)
-    draw("CONTINUUM / META SETUP\n----------------------------------------\nSave in Keychain? [y/N]\nThe key will never be written to settings or logs.\n\nNo keeps it only in this process and its jobs.\nYes stores it in this device's macOS login Keychain.\n\n[y] save securely   [n/Enter] session only\n[Esc] cancel");
+    draw("CONTINUUM / META SETUP\n----------------------------------------\nSave in Keychain? [Y/n]\nThe key will never be written to settings or logs.\n\nYes stores it in this Mac's login Keychain so the next run needs no key.\nNo keeps it only in this process and its jobs.\n\n[Enter/y] save securely   [n] session only\n[Esc] cancel");
 #else
     draw("CONTINUUM / META SETUP\n----------------------------------------\nSecure persistence unavailable on this platform.\nThe key will never be written to settings or logs.\n\nKeep it only in this process and its jobs?\n\n[n/Enter] session only\n[Esc] cancel");
 #endif
     int choice = 0;
     while (!(choice == 'y' || choice == 'Y' || choice == 'n' || choice == 'N' || choice == '\r' || choice == '\n' || choice == 3 || choice == 27 || choice < 0)) choice = key(-1);
     if (choice == 3 || choice == 27 || choice < 0) { wipe(value); return CT_REJECTED; }
-    bool save = choice == 'y' || choice == 'Y';
+    #if defined(__APPLE__)
+    // Enter keeps the key for the next run: typing it again every launch is
+    // the friction the wizard exists to remove.
+    bool save = choice == 'y' || choice == 'Y' || choice == '\r' || choice == '\n';
+#else
+    bool save = false;
+#endif
     if (save) {
         uint8_t back[4096] = {};
         int64_t n = 0;

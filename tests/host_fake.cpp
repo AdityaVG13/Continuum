@@ -128,17 +128,8 @@ int32_t ct_host_stage(ct_bytes req, ct_output out, int64_t *out_len) {
     return put_receipt(out, out_len, receipt);
 }
 
-int32_t ct_host_rejoin(ct_bytes req, ct_output out, int64_t *out_len) {
+int32_t ct_host_rejoin(ct_bytes, ct_output out, int64_t *out_len) {
     if (!out_len || !out.data) return CT_INVALID_ARGUMENT;
-    // The wizard's owner-named join: record exactly what was asked so the
-    // test can check it, and make the router appear in discovery.
-    if (const char *record = std::getenv("CT_TEST_WIFI_JOINED"); record && req.data && req.len > 0) {
-        if (FILE *f = std::fopen(record, "w")) {
-            std::fwrite(req.data, 1, (size_t)req.len, f);
-            std::fclose(f);
-            return put_receipt(out, out_len, "{\"joined\":true,\"already\":false,\"ip\":\"127.0.0.1\"}");
-        }
-    }
     const char *joined = std::getenv("CT_TEST_REJOIN");
     if (joined && std::strcmp(joined, "1") == 0)
         return put_receipt(out, out_len,
