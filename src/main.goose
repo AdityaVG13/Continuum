@@ -265,6 +265,12 @@ fn main() {
         if rc != 0 { exit(rc); }
         return;
     }
+    if argv.len == 4 && argv[1] == "--device-qos" && argv[3] == "--execute" {
+        exit(continuum::device_qos_step(continuum::setup_directory(), argv[2], false));
+    }
+    if argv.len == 3 && argv[1] == "--device-qos-restore" && argv[2] == "--execute" {
+        exit(continuum::device_qos_step(continuum::setup_directory(), "", true));
+    }
     if argv.len == 3 && argv[1] == "--talk" {
         let report = continuum::run_device_agent(loop_config("MODEL_API_KEY"), continuum::setup_directory(), argv[2], false);
         print(continuum::device_agent_record(report));
@@ -393,6 +399,8 @@ fn main() {
     print("       continuum --device-mode observer | advisor | operator | takeover (takeover needs a passed drill)");
     print("       continuum --takeover-drill (runs the loop, proves revocation, writes the artifact)");
     print("       continuum --measure host:port/path /loadpath (idle vs loaded RTT, goodput, sample-counted evidence)");
+    print("       continuum --device-step qos-status (read-only: qdisc tool and current root)");
+    print("       continuum --device-qos <profile.json> --execute | --device-qos-restore --execute (owner-applied qdisc)");
     print("       continuum --talk <message> (selected-device conversation; never grants reboot permission)");
     print("       continuum --owner-policy | --owner-policy-set <json> (owner only; never a Meta tool)");
     print("       continuum --program-install <json> | --program-prune");

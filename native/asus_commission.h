@@ -749,8 +749,9 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         if (!str_field(body, "qos_op", 8, true, op) ||
             !str_field(body, "qos_interface", 8, false, iface))
             return fail("qos_profile_invalid");
-        if (op != "apply" && op != "restore") return fail("qos_operation_unsupported");
-        if (op == "restore" && iface.empty()) iface = qos_owned_interface(directory);
+        if (op != "apply" && op != "restore" && op != "status") return fail("qos_operation_unsupported");
+        if (iface.empty() && (op == "restore" || op == "status")) iface = qos_owned_interface(directory);
+        if (iface.empty() && op == "status") iface = "eth0";
         if (iface != "eth0" && iface != "ppp0") return fail("qos_interface_unsupported");
         if (op == "apply") {
             if (!str_field(body, "qos_mode", 16, true, mode) ||
@@ -776,6 +777,19 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             return commission_save(directory + "/qos-last.json", receipt, true) &&
                    commission_save(directory + "/events.jsonl", receipt + "\n", true);
         };
+        // Read-only preflight: prove the qdisc tool and the current root kind
+        // before the owner commits to a window. It never installs or removes a
+        // qdisc and never rewrites a service flag.
+        if (op == "status") {
+            std::string receipt = "{\"phase\":\"qos_status\",\"authenticated\":true,\"changed\":false,"
+                "\"qos_verified\":true,\"qos_interface\":\"" + iface + "\",\"qdisc\":\"" +
+                qdisc_excerpt(probe) + "\",\"qdisc_tool\":\"present\",\"owned_interface\":\"" +
+                qos_owned_interface(directory) + "\",\"settings\":" + commission_object(current) + "}";
+            if (!record(receipt))
+                return fail("qos_receipt_not_durable");
+            bootstrap.done(commission_ssh_settings(s, current, user, password));
+            return commission_emit(out, out_len, receipt);
+        }
         if (op == "restore") {
             if (qdisc_default_kind(probe)) {
                 if (!commission_save(directory + "/qos-owned.txt", iface + "\nnone\n", true))

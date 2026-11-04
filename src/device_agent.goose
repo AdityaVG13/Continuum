@@ -103,17 +103,22 @@ fn device_qos_profile(payload: const u8[:], profile: QosProfile&) -> bool {
 }
 // A qdisc change is an apply-class effect; undoing it is restore-class. The
 // owner's existing grants gate both, so QoS cannot bypass a denied apply.
-fn device_qos(d: DeviceState&, operation: const u8[:], payload: const u8[:]) -> DeviceToolResult {
+fn device_qos(d: DeviceState&, directory: const u8[:], operation: const u8[:], payload: const u8[:]) -> DeviceToolResult {
     if !d.setup_approved { return device_tool_rejected("standing_device_permission_required"); }
-    let grant = if operation == "apply_qos" { "apply" } else { "restore" };
+    let is_status = operation == "read_qos";
+    let grant = if operation == "apply_qos" { "apply" } else if is_status { "runtime" } else { "restore" };
     let refused = owner_admit(grant, 0);
     if refused.len > 0 { return device_tool_rejected(refused); }
-    // The qdisc baseline lives inside an owned recovery directory; without one
-    // there is nothing Continuum can prove it restored.
+    // A read needs a durable receipt directory, not a mutation; apply/restore
+    // need the owned baseline that directory stands for.
+    if d.recovery_directory.len == 0 && !is_status { return device_tool_rejected("owned_baseline_required"); }
     if d.phase != "enrolled" && d.phase != "baseline_applied" {
         return device_tool_rejected("owned_baseline_required");
     }
-    if d.recovery_directory.len == 0 { return device_tool_rejected("owned_baseline_required"); }
+    if d.recovery_directory.len == 0 {
+        d.recovery_directory = str(directory, "/device/recovery-", time_ns());
+        if !device_save(d) { return device_tool_rejected("device_intent_not_durable"); }
+    }
     var profile = QosProfile {};
     if operation == "apply_qos" {
         if !device_qos_profile(payload, profile) { return device_tool_rejected("invalid_qos_profile"); }
@@ -124,9 +129,9 @@ fn device_qos(d: DeviceState&, operation: const u8[:], payload: const u8[:]) -> 
     if !observed.authenticated || !device_identity(d, observed.receipt) {
         return device_tool_rejected(if observed.authenticated { d.reason } else { observed.reason });
     }
-    let op = if operation == "restore_qos" { "restore" } else { "apply" };
+    let op = if operation == "restore_qos" { "restore" } else if operation == "read_qos" { "status" } else { "apply" };
     var raw: u8[>..] = [];
-    let attempted = true;
+    let attempted = !is_status;
     let ok = commission_qos(d.connection, d.recovery_directory, true, op, profile, raw, true);
     if !ok {
         d.reason = "qos_operation_unresolved_inspect_before_retry";
@@ -228,9 +233,8 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
         if raw.len > 8192 { return device_tool_rejected("device_receipt_over_bound"); }
         return DeviceToolResult { receipt: raw, ok: true };
     }
-    if operation == "apply_qos" || operation == "restore_qos" {
-
-        return device_qos(d, operation, payload);
+    if operation == "apply_qos" || operation == "restore_qos" || operation == "read_qos" {
+        return device_qos(d, directory, operation, payload);
     }
     if operation != "inspect" && operation != "enroll" && operation != "runtime" &&
             operation != "apply" && operation != "restore" && operation != "verify" {

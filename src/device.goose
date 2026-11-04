@@ -320,6 +320,25 @@ fn device_request_reboot(d: DeviceState&) -> bool {
     d.reason = if ok { "owner_reboot_requested_verify_after_return" } else { "reboot_outcome_unknown_verify_before_retry" };
     return ok;
 }
+// Owner-facing QoS step. The model path narrates the demo, but an owner must be
+// able to apply or undo the qdisc without a provider call, and a lab A/B that
+// depends on a paid model call is not a controlled measurement.
+fn device_qos_step(directory: const u8[:], payload: const u8[:], restore: bool) -> i64 {
+    if !device_open(directory, 1) {
+        print("DEVICE_REFUSED binding busy or private storage unavailable");
+        return 1;
+    }
+    var d = DeviceState {};
+    if !device_load(d) || d.candidate_id.len == 0 {
+        ct_device_close(); print("DEVICE_REFUSED select an observed device first"); return 1;
+    }
+    let result = device_qos(d, directory, if restore { "restore_qos" } else { "apply_qos" }, payload);
+    ct_device_close();
+    if result.receipt.len > 0 { print(result.receipt); }
+    if !result.ok { return 1; }
+    return 0;
+}
+
 fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i64 {
     if !device_open(directory, 1) { print("DEVICE_REFUSED binding busy or private storage unavailable"); return 1; }
     var d = DeviceState {};
@@ -341,6 +360,13 @@ fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i6
         } else { d.reason = observed.reason; }
     } else if action == "reboot" && execute {
         ok = device_request_reboot(d);
+    } else if action == "qos-status" {
+        // Read-only preflight for the optimization effect: proves the qdisc
+        // tool is present and reports the current root before any window.
+        let preflight = device_qos(d, directory, "read_qos", "");
+        ok = preflight.ok;
+        if preflight.receipt.len > 0 { print(preflight.receipt); }
+        else { d.reason = "qos_preflight_unavailable"; }
     } else if action == "restore" && execute && d.recovery_directory.len > 0 {
         let observed = device_inventory(d);
         if observed.authenticated {

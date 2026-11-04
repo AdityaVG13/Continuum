@@ -118,7 +118,7 @@ fn commission_request(cfg: LeapConfig, action: const u8[:], directory: const u8[
 // the interface's qdisc state and restore returns the kernel-default root.
 fn commission_qos(cfg: LeapConfig, directory: const u8[:], execute: bool, op: const u8[:],
         qos: QosProfile, result: u8[>..]&, quiet: bool = false) -> bool {
-    if op != "apply" && op != "restore" {
+    if op != "apply" && op != "restore" && op != "status" {
         if !quiet { print("COMMISSION_REFUSED unsupported qos operation"); }
         return false;
     }

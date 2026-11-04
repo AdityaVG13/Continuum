@@ -27,6 +27,9 @@ it is unmanaged or was installed by Continuum: a bounded profile (bandwidth,
 interface, mode, overhead) is validated before any device I/O, the device's own
 readback is the proof, and a unit without tc refuses honestly instead of
 simulating a queue. A vendor-managed qdisc is reported, never stomped.
+read_qos is the read-class preflight for that path: it reports whether the qdisc
+tool exists and what the current root is, and changes nothing. Use it before
+proposing a profile so a missing tool is discovered before the owner waits.
 Read back changes, preserve recovery, and distinguish runtime proof, persistence
 proof, and measured end-to-end benefit. Missing measurements stay unknown.
 Write reusable bounded local logic when needed, or compose supported operations;

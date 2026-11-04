@@ -707,6 +707,25 @@ def main():
                 drill_state.unlink()
             if drill_path.exists():
                 drill_path.unlink()
+            # The optimization effect gets a read-only preflight: the owner can
+            # learn whether this unit can host a qdisc before committing to a
+            # window, and the read changes nothing.
+            qos_preflight = subprocess.run([unified, "--device-step", "qos-status"], env=no_model,
+                capture_output=True, text=True, timeout=60)
+            assert qos_preflight.returncode == 0, qos_preflight.stdout + qos_preflight.stderr
+            assert '"qdisc_tool":"present"' in qos_preflight.stdout, qos_preflight.stdout
+            assert '"changed":false' in qos_preflight.stdout and '"qdisc":' in qos_preflight.stdout, qos_preflight.stdout
+            # The owner can apply and undo the qdisc without a provider call, so
+            # a lab A/B is not a paid-model measurement.
+            profile = json.dumps({"bandwidth_kbps": 100000, "interface": "eth0",
+                                  "mode": "cake", "overhead_bytes": 0})
+            qos_applied = subprocess.run([unified, "--device-qos", profile, "--execute"], env=no_model,
+                capture_output=True, text=True, timeout=120)
+            assert qos_applied.returncode == 0 and '"phase":"qos_applied"' in qos_applied.stdout, qos_applied.stdout
+            assert '"rate_readback":"verified"' in qos_applied.stdout, qos_applied.stdout
+            qos_undone = subprocess.run([unified, "--device-qos-restore", "--execute"], env=no_model,
+                capture_output=True, text=True, timeout=120)
+            assert qos_undone.returncode == 0 and '"phase":"qos_restored"' in qos_undone.stdout, qos_undone.stdout
             reconciled = subprocess.run([unified, "--device-step", "restore", "--execute"], env=no_model,
                 capture_output=True, text=True, timeout=60)
             assert reconciled.returncode == 0, "the drill starts from a reconciled baseline: " + reconciled.stdout
