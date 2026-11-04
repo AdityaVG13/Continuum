@@ -876,6 +876,8 @@ def main():
             assert PASSWORD not in json.dumps(pending) + json.dumps(service_state) + setup.stdout
             transcript.append({"action": "integrated_handoff", "device": pending, "service": service_state,
                                "identity_mismatch": mismatched["device"], "boundary": "authored_device_os_and_model_transport"})
+            drive_reach(unified, integrated_env, directory)
+            print("WIZARD_REACH_GREEN", directory)
             drive_wizard(unified, integrated_env, directory, port, device, outage_file)
             print("WIZARD_LIFECYCLE_GREEN", directory)
             print("DEVICE_LIFECYCLE_ALL_GREEN", directory)
@@ -885,6 +887,85 @@ def main():
         server.wait(timeout=5)
         log.close()
         print("COMMISSION_TEST_SHA256", hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+
+
+def drive_reach(unified, base_env, directory):
+    """Nothing in reach -> join the router's Wi-Fi by name -> bind by number.
+
+    A factory-reset router is only an open setup network: the wizard must get
+    from "no router" to a durable Wi-Fi binding without the panels or a CLI.
+    The fake host records the join request; discovery shows the router only
+    after that join happened.
+    """
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+
+    home = directory / "reach"
+    config = home / "config/continuum"
+    config.mkdir(parents=True, mode=0o700)
+    joined = directory / "reach-joined.json"
+    env = dict(base_env, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color",
+               NO_COLOR="1", CONTINUUM_DEVICE_FIXTURE="wifi", CT_TEST_WIFI_JOINED=str(joined))
+    env.pop("MODEL_API_KEY", None)
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    process = subprocess.Popen([unified], stdin=slave, stdout=slave, stderr=slave, env=env)
+    output = bytearray()
+    cursor = [0]
+
+    def expect(text, timeout=20):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            at = output.find(text.encode(), cursor[0])
+            if at >= 0:
+                cursor[0] = at + len(text)
+                return
+            if select.select([master], [], [], 0.1)[0]:
+                chunk = os.read(master, 65536)
+                if not chunk:
+                    break
+                output.extend(chunk)
+        raise AssertionError("reach did not show " + repr(text) + "\n" + output[-2500:].decode(errors="replace"))
+
+    def press(keys):
+        while select.select([master], [], [], 0.05)[0]:
+            output.extend(os.read(master, 65536))
+        cursor[0] = len(output)
+        os.write(master, keys)
+
+    try:
+        expect("STEP 1 OF 8")
+        expect("No router is in reach")
+        expect("[w] Join a Wi-Fi network")
+        assert not joined.exists()
+        press(b"w")
+        expect("Wi-Fi network name")
+        press(b"ASUS_5C\r")
+        expect("[o] Open network")
+        press(b"o")
+        expect("Routers this Mac can reach", 30)
+        expect("Joined ASUS_5C")
+        request = json.loads(joined.read_text())
+        assert request["ssid"] == "ASUS_5C" and request["psk_ref"] == "" and request["interface"] == "lo0", request
+        press(b"1")
+        expect("CONTINUUM / BIND THIS ROUTER")
+        press(b"\r")
+        expect("STEP 2 OF 8")
+        bound = json.loads((config / "device/state.json").read_text())
+        assert bound["candidate_id"] == "lo0:127.0.0.1" and bound["phase"] == "selected", bound
+        # Wi-Fi control means the enrollment ceremony rejoins the renamed radio.
+        assert bound["connection"]["control_rides_wifi"] is True, bound["connection"]
+        press(b"\x1b")
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
 
 
 def drive_wizard(unified, base_env, directory, port, device, outage_file):

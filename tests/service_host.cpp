@@ -4,10 +4,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 
 extern "C" int32_t ct_discover_full(ct_bytes, ct_output out, int64_t *length) {
-    if (!std::getenv("CONTINUUM_DEVICE_FIXTURE")) return CT_NOT_IMPLEMENTED;
-    const std::string body = "{\"provenance\":\"authored_host_fixture\",\"interfaces\":["
+    const char *fixture = std::getenv("CONTINUUM_DEVICE_FIXTURE");
+    if (!fixture) return CT_NOT_IMPLEMENTED;
+    // "wifi": a host whose only link is Wi-Fi and whose router is a factory
+    // setup network. The router is in reach only after the join was made.
+    const char *joined = std::getenv("CT_TEST_WIFI_JOINED");
+    const bool wifi = std::strcmp(fixture, "wifi") == 0;
+    const std::string body = wifi ? std::string("{\"provenance\":\"authored_host_fixture\",\"interfaces\":["
+        "{\"name\":\"lo0\",\"address\":\"127.0.0.1\",\"netmask\":\"255.0.0.0\",\"kind\":\"wifi\",\"up\":true}],"
+        "\"candidates\":[") + (joined && access(joined, F_OK) == 0 ?
+        "{\"candidate_id\":\"lo0:127.0.0.1\",\"address\":\"127.0.0.1\",\"interface\":\"lo0\","
+        "\"source\":\"default_route\",\"identity\":\"unverified\"}" : "") + "]}" :
+        "{\"provenance\":\"authored_host_fixture\",\"interfaces\":["
         "{\"name\":\"lo0\",\"address\":\"127.0.0.1\",\"netmask\":\"255.0.0.0\",\"kind\":\"ethernet\",\"up\":true}],"
         "\"candidates\":[{\"candidate_id\":\"lo0:127.0.0.1\",\"address\":\"127.0.0.1\","
         "\"interface\":\"lo0\",\"source\":\"neighbor_cache\",\"identity\":\"unverified\"}]}";

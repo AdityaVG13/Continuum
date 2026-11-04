@@ -288,6 +288,26 @@ std::string title(const std::string &body) {
     if (start == std::string::npos || end == std::string::npos) return "";
     return body.substr(start + 1, std::min<size_t>(end - start - 1, 256));
 }
+// Advisory vendor label from public markers in the unauthenticated landing
+// page and its headers. It decides which backend to offer and what to tell
+// the owner; it is never identity evidence (enrollment proves that).
+std::string vendor(const std::string &response) {
+    if (response.empty()) return "";
+    std::string lower = response;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+    auto has = [&](const char *marker) { return lower.find(marker) != std::string::npos; };
+    if (has("asus") || has("qis_wizard") || has("main_login.asp") || has("server: httpd/2.0")) return "asus";
+    if (has("openwrt") || has("luci")) return "openwrt";
+    if (has("netgear") || has("routerlogin")) return "netgear";
+    if (has("tp-link") || has("tplink")) return "tp-link";
+    if (has("linksys")) return "linksys";
+    if (has("unifi") || has("ubiquiti") || has("ubnt")) return "ubiquiti";
+    if (has("mikrotik") || has("routeros")) return "mikrotik";
+    if (has("fritz!box") || has("fritz")) return "avm";
+    if (has("eero")) return "eero";
+    if (has("synology")) return "synology";
+    return "unknown";
+}
 } // namespace
 
 extern "C" int32_t ct_host_sample(ct_output out, int64_t *n) {
@@ -373,7 +393,7 @@ extern "C" int32_t ct_discover_probe(ct_bytes id, int64_t port, ct_output out, i
         int status = at == std::string::npos ? 0 : std::atoi(body.c_str() + at + 1);
         std::string result = "{\"candidate_id\":" + quoted(c.id) + ",\"port\":" + std::to_string(port) +
             ",\"http_status\":" + (status > 0 ? std::to_string(status) : "null") +
-            ",\"title\":" + quoted(title(body)) +
+            ",\"title\":" + quoted(title(body)) + ",\"vendor\":" + quoted(vendor(body)) +
             ",\"authenticated\":false,\"network_changed\":false,\"content_trust\":\"untrusted_device_data\"}";
         return put(out, n, result);
     }

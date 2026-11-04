@@ -544,6 +544,141 @@ fn confirm_device_job(job: const u8[:]) -> bool {
     return false;
 }
 
+// Observed router candidates, default routes first: the wizard binds by
+// number instead of sending the owner to the panels. ids holds at most 9.
+fn setup_candidates(network: const u8[:], ids: u8[..64][>..]&, kinds: u8[>..]&) {
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(network, doc, decoded);
+    if !root { return; }
+    let candidates = json::member(root, "candidates");
+    let interfaces = json::member(root, "interfaces");
+    var pass: i64 = 0;
+    while pass < 2 {
+        var c = if candidates { candidates.first } else { candidates };
+        while c && ids.len < 9 {
+            let source, s = json::as_string(json::member(c, "source"));
+            let id, i = json::as_string(json::member(c, "candidate_id"));
+            let iface, f = json::as_string(json::member(c, "interface"));
+            let first = s && source == "default_route";
+            if i && id.len <= 64 && ((pass == 0) == first) {
+                var held: u8[..64] = id; ids.push(held);
+                var kind: u8[>..] = []; kind.append("link");
+                if interfaces && f {
+                    var link = interfaces.first;
+                    while link {
+                        let name, n = json::as_string(json::member(link, "name"));
+                        let k, kk = json::as_string(json::member(link, "kind"));
+                        if n && kk && name == iface { kind = []; kind.append(if k == "wifi" { "Wi-Fi" } else { k }); }
+                        link .= link.next;
+                    }
+                }
+                kinds.append(kind); kinds.append(if first { ", default route" } else { ", on-link neighbor" }); kinds.append("\n");
+            }
+            c .= c.next;
+        }
+        pass += 1;
+    }
+}
+fn setup_nth_line(text: const u8[:], index: i64) -> u8[>..] {
+    var out: u8[>..] = []; var line: i64 = 0; var i: i64 = 0;
+    while i < text.len {
+        if text[i] == 10 { line += 1; }
+        else if line == index { out.push(text[i]); }
+        i += 1;
+    }
+    return out;
+}
+// What answers on each candidate's web port, read once per look (a GET of
+// '/', no credentials). Advisory: it names the vendor so the owner knows
+// whether Continuum has a backend for it; enrollment is the identity proof.
+fn setup_identify(network: const u8[:]) -> u8[>..] {
+    var ids: u8[..64][>..] = []; var kinds: u8[>..] = [];
+    setup_candidates(network, ids, kinds);
+    var out: u8[>..] = []; var n: i64 = 0;
+    while n < ids.len {
+        var label: u8[>..] = [];
+        if n >= 4 { label.append("not probed"); }
+        else {
+            var buffer: u8[..4096] = [0; 4096]; var len: i64 = 0;
+            if ct_setup_probe(ids[n], 80, buffer, len) != 0 || len <= 0 || len > buffer.len { label.append("no web answer on port 80"); }
+            else {
+                var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                let root, err = json::parse(buffer[..len], doc, decoded);
+                let vendor, v = json::as_string(json::member(root, "vendor"));
+                let title, t = json::as_string(json::member(root, "title"));
+                if !v || vendor.len == 0 { label.append("no web answer on port 80"); }
+                else if vendor == "asus" { label.append("ASUS router -- supported"); }
+                else if vendor == "unknown" {
+                    label.append("web page");
+                    if t && title.len > 0 { label.append(" \""); for b in title { if b >= 32 && b < 127 && label.len < 60 { label.push(b); } } label.append("\""); }
+                    label.append(" -- vendor not recognised");
+                } else { label.append(str(vendor, " router -- no Continuum backend yet")); }
+            }
+        }
+        out.append(label); out.append("\n");
+        n += 1;
+    }
+    return out;
+}
+fn setup_wifi_interface(network: const u8[:]) -> u8[>..] {
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(network, doc, decoded);
+    var out: u8[>..] = [];
+    let interfaces = json::member(root, "interfaces");
+    if !root || !interfaces { return out; }
+    var link = interfaces.first;
+    while link {
+        let name, n = json::as_string(json::member(link, "name"));
+        let kind, k = json::as_string(json::member(link, "kind"));
+        if n && k && kind == "wifi" && out.len == 0 && name.len <= 15 { out.append(name); }
+        link .= link.next;
+    }
+    return out;
+}
+// The owner names the network: macOS hides scanned network names from
+// unsigned tools, so Continuum cannot list them. A factory-reset router's
+// setup network is open; an existing network takes its passphrase, which is
+// stored in the OS vault for the join and never shown.
+fn setup_join_wifi(network: const u8[:], notice: u8[>..]&) -> bool {
+    let iface = setup_wifi_interface(network);
+    if iface.len == 0 { notice.append("This Mac has no Wi-Fi interface up; connect the router with a cable, then press Enter."); return false; }
+    var ssid: u8[>..] = [];
+    if !setup_field("Wi-Fi network name (factory setup networks are printed on the router's label)", "", ssid) || ssid.len > 32 {
+        notice.append("No network named; nothing changed."); return false;
+    }
+    var frame: u8[>..] = [];
+    frame.append(str("CONTINUUM / JOIN WI-FI\n--------------------------------------------------------------------------\nNetwork  ", ssid, "   on ", iface, "\n\n"));
+    frame.append("Is it open (a factory-reset router's setup network) or protected?\nThis Mac leaves its current Wi-Fi network to join it.\n\n[o] Open network    [p] Enter its password\n[Esc] Cancel; nothing changes\n");
+    ct_setup_draw(frame, 0);
+    var choice: i64 = 0;
+    while choice != 'o' && choice != 'p' {
+        choice = ct_tui_key(-1);
+        if choice == 27 || choice == 3 || choice < 0 { notice.append("Join cancelled; nothing changed."); return false; }
+    }
+    var psk_ref: u8[..64] = "";
+    if choice == 'p' {
+        var secret: u8[..256] = [0; 256]; var sn: i64 = 0;
+        if ct_setup_secret("Wi-Fi password", secret, sn) != 0 || sn < 8 || sn > 63 {
+            var z: i64 = 0; while z < 256 { secret[z] = 0; z += 1; }
+            notice.append("Password cancelled or not 8..63 characters; nothing changed."); return false;
+        }
+        psk_ref = "continuum.wifi.join";
+        let stored = ct_setup_vault_store(psk_ref, secret[..sn]) == 0;
+        var z: i64 = 0; while z < 256 { secret[z] = 0; z += 1; }
+        if !stored { notice.append("Could not store the password in the OS vault; nothing changed."); return false; }
+    }
+    frame = [];
+    frame.append(str("CONTINUUM / JOIN WI-FI\n--------------------------------------------------------------------------\nJoining ", ssid, " on ", iface, " and waiting for an address (up to 45 s)...\n"));
+    ct_setup_draw(frame, 0);
+    var ip: u8[>..] = [];
+    if !host_join_wifi(iface, ssid, psk_ref, ip) {
+        notice.append(str("Could not join ", ssid, " or get an address. Check the name (and password), move closer, then press w again."));
+        return false;
+    }
+    notice.append(str("Joined ", ssid, "; this Mac is ", ip, " on it."));
+    return true;
+}
+
 // Enter on the Device panel walks the lifecycle. A default-route candidate is
 // only evidence of a gateway, not of the intended router, so this helper
 // returns it only when it is unambiguous; several candidates stay an explicit
@@ -568,10 +703,10 @@ fn setup_gateway_candidate(network: const u8[:]) -> u8[>..] {
     var none: u8[>..] = [];
     return none;
 }
-fn confirm_bind(candidate: const u8[:]) -> bool {
+fn confirm_bind(candidate: const u8[:], label: const u8[:]) -> bool {
     var frame: u8[>..] = [];
     frame.append("CONTINUUM / BIND THIS ROUTER\n--------------------------------------------------------------------------\n");
-    frame.append(str("Candidate  ", candidate, "  (this host's default route)\n\n"));
+    frame.append(str("Candidate  ", candidate, "\nAnswers    ", if label.len > 0 { label } else { "not probed" }, "\n\n"));
     frame.append("Record it as this installation's router?\nNo credential is created and nothing is written to the router.\n\n[Enter] Bind\n[Esc] Cancel\n");
     ct_setup_draw(frame, 0);
     while true {
@@ -852,7 +987,7 @@ fn setup_wizard_advice(out: u8[>..]&, step: i64, reason: const u8[:]) {
 }
 fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_ok: bool, tuned: bool, settled: bool,
         qos_checked: bool, evidence: const u8[:], watching: bool, watch_down: bool, details: const u8[:],
-        notice: const u8[:], busy: bool, failed: bool, why: const u8[:], show_raw: bool) -> i64 {
+        notice: const u8[:], busy: bool, failed: bool, why: const u8[:], show_raw: bool, labels: const u8[:]) -> i64 {
     var d = DeviceState {};
     let bound = device_saved(setup_directory(), d) && d.candidate_id.len > 0;
     let step = setup_wizard_step(d, cfg, bound, key_ok, tuned, settled);
@@ -876,11 +1011,24 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
     out.append(str("STEP ", if step == 0 { 8 } else { step }, " OF 8   "));
     out.append(banner);
     out.append("\n\n");
-    if step == 1 {
-        let gateway = setup_gateway_candidate(network);
-        out.append("Continuum found this host's default-route router:\n\n  ");
-        out.append(if gateway.len > 0 { gateway } else { "none, or several -- press a, then p" });
-        out.append("\n\nBinding records the target only. No credential is created\nand nothing is written to the router yet.\n");
+    var cand_ids: u8[..64][>..] = []; var cand_kinds: u8[>..] = [];
+    var single: u8[>..] = [];
+    if step == 1 { setup_candidates(network, cand_ids, cand_kinds); single = setup_gateway_candidate(network); }
+    if step == 1 && cand_ids.len == 0 {
+        out.append("No router is in reach of this Mac yet. Any router, any link:\n\n");
+        out.append("  Cable   plug this Mac into one of the router's LAN ports, then Enter\n");
+        out.append("  Wi-Fi   press w and type the router's network name. A factory-reset\n");
+        out.append("          router broadcasts an open setup network (name on its label)\n");
+        out.append("\nNothing has been written anywhere.\n");
+    } else if step == 1 {
+        out.append("Routers this Mac can reach:\n\n");
+        var n: i64 = 0;
+        while n < cand_ids.len {
+            out.append(str(if single.len > 0 && single == cand_ids[n] { "> " } else { "  " }, n + 1, "  ", cand_ids[n], "   (",
+                setup_nth_line(cand_kinds, n), ")\n     ", setup_nth_line(labels, n), "\n"));
+            n += 1;
+        }
+        out.append("\nBinding records the target only. No credential is created\nand nothing is written to the router yet.\n");
     } else if step == 2 {
         out.append("Creates this router's admin credential, renames its Wi-Fi and\nrotates the passphrase. This host may drop off Wi-Fi and rejoin.\n\nFactory-only: a unit that is already configured refuses safely and\nnothing on it changes. On that failure you can take the unit over\nwith the admin password it already uses.\n");
     } else if step == 3 {
@@ -953,7 +1101,9 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
         else if (step == 7 && qos_checked) || step == 8 { out.append("[Enter] Retry    [c] Change inputs    [i] Raw output\n"); }
         else { out.append("[Enter] Retry this step    [i] Raw output\n"); }
     }
-    else if step == 1 { out.append("[Enter] Bind this router\n"); }
+    else if step == 1 && cand_ids.len == 0 { out.append("[w] Join a Wi-Fi network    [Enter] Look again\n"); }
+    else if step == 1 && single.len > 0 { out.append("[Enter] Bind the marked router    [1-9] Another    [w] Wi-Fi\n"); }
+    else if step == 1 { out.append("[1-9] Bind that router    [Enter] Look again    [w] Wi-Fi\n"); }
     else if step == 2 { out.append("[Enter] Enroll this router\n"); }
     else if step == 3 { out.append(if has_key { "[Enter] Choose the model, then verify    [k] New key\n" } else { "[Enter] Enter the Meta key\n" }); }
     else if step == 4 { out.append("[Enter] Let Meta set it up\n"); }
@@ -1173,6 +1323,7 @@ fn run_setup_tui() -> bool {
     // no provider call) so the Device panel can act on what is actually here
     // instead of sending the operator to the CLI.
     var network: u8[>..] = discover_host();
+    var labels: u8[>..] = setup_identify(network);
     var observed_wall_ms: i64 = time_ns() / 1000000;
     var details: u8[>..] = [];
     var startup_device = DeviceState {};
@@ -1222,7 +1373,7 @@ fn run_setup_tui() -> bool {
             var wframe: u8[>..] = [];
             if wizard {
                 let drawn = setup_wizard_body(wframe, cfg, network, verified, tuned, settled, qos_checked, evidence,
-                    watching, watch_down, details, notice, busy, step_failed, fail_reason, show_raw);
+                    watching, watch_down, details, notice, busy, step_failed, fail_reason, show_raw, labels);
                 // READY shows the live monitor; it repaints once a second.
                 ready_view = drawn == 0 && !busy;
                 ct_setup_draw(wframe, 0); dirty = false;
@@ -1282,23 +1433,46 @@ fn run_setup_tui() -> bool {
             if wizard && watching {
                 // Waiting for a rebooting router: only quitting is offered.
                 if key == 27 { break; }
-            } else if wizard && (key == 13 || key == 10 || key == 'k' || key == 'c' || key == 'u') {
+            } else if wizard && (key == 13 || key == 10 || key == 'k' || key == 'c' || key == 'u' || key == 'w' || (key >= '1' && key <= '9')) {
                 var wd = DeviceState {};
                 let wbound = device_saved(setup_directory(), wd) && wd.candidate_id.len > 0;
                 let wstep = setup_wizard_step(wd, cfg, wbound, verified, tuned, settled);
                 let enter = key == 13 || key == 10;
                 // A letter acts only on the screen that offers it.
                 let offered = enter || (key == 'k' && wstep == 3) || (key == 'u' && wstep == 0) ||
+                    (wstep == 1 && (key == 'w' || (key >= '1' && key <= '9'))) ||
                     (key == 'c' && ((wstep == 7 && qos_checked) || (wstep == 8 && evidence.len == 0)));
                 if offered {
                 notice = [];
                 step_failed = false; show_raw = false; fail_reason = [];
                 if wstep == 1 {
+                    var ids: u8[..64][>..] = []; var kinds: u8[>..] = [];
+                    setup_candidates(network, ids, kinds);
                     let gateway = setup_gateway_candidate(network);
-                    if gateway.len == 0 { notice.append("No single default-route router; press a, then p."); }
-                    else if !confirm_bind(gateway) { notice.append("Binding cancelled; target unchanged."); }
-                    else if !device_select(setup_directory(), network, gateway, "Continuum", 80, false) {
-                        notice.append("Binding refused or the router is no longer observed.");
+                    var pick: u8[>..] = []; var label: u8[>..] = [];
+                    if key == 'w' {
+                        if setup_join_wifi(network, notice) {
+                            network = discover_host(); labels = setup_identify(network); observed_wall_ms = time_ns() / 1000000;
+                        }
+                    } else if key >= '1' && key <= '9' {
+                        let n = key - '1';
+                        if n < ids.len { pick.append(ids[n]); label = setup_nth_line(labels, n); }
+                        else { notice.append("No router has that number."); }
+                    } else if gateway.len > 0 && ids.len > 0 {
+                        pick.append(gateway);
+                        var k: i64 = 0;
+                        while k < ids.len { if ids[k] == gateway { label = setup_nth_line(labels, k); } k += 1; }
+                    } else {
+                        network = discover_host(); labels = setup_identify(network); observed_wall_ms = time_ns() / 1000000;
+                        var again: u8[..64][>..] = []; var again_kinds: u8[>..] = [];
+                        setup_candidates(network, again, again_kinds);
+                        notice.append(if again.len == 0 { "Still no router in reach. Plug in a cable or press w." } else { "Looked again." });
+                    }
+                    if pick.len > 0 {
+                        if !confirm_bind(pick, label) { notice.append("Binding cancelled; target unchanged."); }
+                        else if !device_select(setup_directory(), network, pick, "Continuum", 80, false) {
+                            notice.append("Binding refused or the router is no longer observed. Press Enter to look again.");
+                        }
                     }
                 } else if wstep == 2 {
                     job = []; job.append("device-enroll");
@@ -1498,7 +1672,7 @@ fn run_setup_tui() -> bool {
                     let gateway = setup_gateway_candidate(network);
                     if network.len == 0 { notice.append("No local observation yet; press d to discover this host."); }
                     else if gateway.len == 0 { notice.append("No single default-route candidate; press p to choose the router."); }
-                    else if !confirm_bind(gateway) { notice.append("Binding cancelled; target unchanged."); }
+                    else if !confirm_bind(gateway, "") { notice.append("Binding cancelled; target unchanged."); }
                     else if device_select(setup_directory(), network, gateway, "Continuum", 80, false) {
                         notice.append("Bound. Press Enter again to enroll this router.");
                     } else { notice.append("Binding refused or the candidate is no longer observed; press d, then p."); }
