@@ -293,6 +293,12 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
     let ok = commission_request(d.connection, operation, d.recovery_directory, true, raw, true, disable);
     if !ok {
         d.reason = "device_operation_unresolved_inspect_before_retry";
+        // The native apply writes this apply's baseline.json before its first
+        // router write, in a directory created for this apply. Without it the
+        // router was never touched, so the unit is still plainly enrolled and a
+        // retry needs no restore (which would refuse: no baseline to restore).
+        var written: u8[>..] = [];
+        if operation == "apply" && !read_file(str(d.recovery_directory, "/baseline.json"), written) { d.phase = "enrolled"; }
         if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }
         return DeviceToolResult { receipt: if raw.len > 0 && raw.len <= 8192 { raw } else { discovery_rejected(d.reason) }, mutation_attempted: attempted };
     }
@@ -362,7 +368,14 @@ fn run_device_agent(model: ModelConfig, directory: const u8[:], message: const u
         d.setup_approved = true;
         if !device_save(d) { ct_device_close(); report.reason = "device_permission_not_durable"; return report; }
     }
-    let input = device_agent_input(d, device_inventory(d), message, model.max_tool_rounds);
+    let opening = device_inventory(d);
+    // A router that refuses Continuum's saved admin password (typically a
+    // factory reset since enrollment) cannot be worked by any tool; say so
+    // before spending a model call.
+    if !opening.authenticated && opening.reason == "protected_authentication_refused" {
+        ct_device_close(); report.reason = "protected_authentication_refused"; return report;
+    }
+    let input = device_agent_input(d, opening, message, model.max_tool_rounds);
     let tools = device_agent_tools(d);
     var body: u8[>..] = []; var sent: u8[>..] = []; var trail: u8[>..] = [];
     if tools.len == 0 || !meta_request_body(model, model.controller_model, instructions, input, tools, body) || !opening_input(input, sent) {

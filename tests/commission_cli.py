@@ -106,6 +106,10 @@ def device_command():
         elif args[:3] == ["qdisc", "replace", "dev"] and len(args) >= 5:
             assert args[3] == "eth0" and args[4] == "root", "unsupported modeled qdisc"
             spec = args[5:]
+            if spec[:1] == ["cake"] and os.environ.get("CT_COMMISSION_DEVICE_TC_NO_CAKE"):
+                # Stock vendor iproute2 without the CAKE qdisc, as tc reports it.
+                print('Unknown qdisc "cake", hence option "bandwidth" is unparsable', file=sys.stderr)
+                raise SystemExit(1)
             if spec[:1] == ["cake"]:
                 assert spec[1] == "bandwidth" and spec[3] == "overhead", spec
                 assert spec[2].endswith("kbit"), spec
@@ -488,6 +492,13 @@ def main():
             "an unhonored rate must fail the readback: " + clamped.stdout + clamped.stderr)
         assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), (
             "an unverified qdisc must be rolled back to the kernel default")
+        # A firmware whose tc lacks CAKE must say so, not "ssh_program_exit_1",
+        # and must leave the kernel-default queue untouched.
+        no_cake = subprocess.run([binary], env=dict(qos, CT_COMMISSION_DEVICE_TC_NO_CAKE="1"),
+                                 text=True, capture_output=True, timeout=60)
+        assert no_cake.returncode != 0 and "qdisc_cake_unavailable" in no_cake.stdout, (
+            "a tc without CAKE must be named: " + no_cake.stdout + no_cake.stderr)
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast")
         fq = subprocess.run([binary], env=dict(qos, COMMISSION_QOS_MODE="fq_codel",
                                                COMMISSION_QOS_KBPS="80000"),
                             text=True, capture_output=True, timeout=60)

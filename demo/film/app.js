@@ -28,11 +28,11 @@
     { t: 87.0,  line: "Already configured? Type its password once.\nVerified. Nothing written." },
     { t: 95.0,  line: "Then Meta. Continuum reads the models your key can use,\nwith Meta's own prices, and a ceiling on what one step can cost." },
     { t: 107.0, line: "Muse Spark 1.3. One test call proves the key." },
-    { t: 115.0, line: "Spark gets named tools, not a shell.\nIt strips the vendor services,\nand the router's own receipt decides if it counts." },
+    { t: 115.0, line: "Spark gets named tools, not a shell.\nIt turns off the vendor services nothing here uses,\nand the router's own receipt decides if it counts." },
     { t: 128.0, line: "One reboot, approved by me.\nContinuum waits for the router to go dark and come back,\nthen proves the settings survived." },
-    { t: 143.0, line: "It shapes the upload queue with CAKE,\nand reads the qdisc back from the router itself." },
-    { t: 153.0, line: "Then it measures. Idle, then loaded.\nOnly a claimable run opens the last gate." },
-    { t: 163.0, line: "And it stays. A resident monitor.\nA quiet night costs zero model calls." },
+    { t: 143.0, line: "Shaping is next: one CAKE queue on the WAN.\nThis firmware has no CAKE.\nContinuum says exactly that, and writes nothing." },
+    { t: 153.0, line: "So there's no queue to measure yet,\nand no number to quote." },
+    { t: 163.0, line: "Enrolled, cleaned up, rebooted and proven,\non a real router, by the router's own receipts." },
     { t: 171.0, line: "No numbers I didn't measure." },
     { t: 175.0, line: "A Meta agent that runs a real router,\nand can't run away with it." },
   ];
@@ -185,8 +185,14 @@ a few minutes. This approves exactly one reboot, nothing else.
 
 Router  en0:192.168.50.1   Phase  baseline_applied   Key  verified
 
-META SAID  &lt;Meta's one-line summary from the run&gt;
 RECEIPT    <span class="ok">baseline applied; runtime and recovery verified by the router</span>
+
+META SAID
+Commissioned under standing permission, no reboot.
+- Applied owned baseline: disable samba, ftp, dlna, daap, webdav
+- Result: phase=baseline_applied, changed_services=2,
+  runtime_verified=true, recovery_verified=true
+- Core routing/firewall/WiFi untouched
 
 <span class="hd">[Enter] Reboot now (one time)</span>
 <span class="dim">BIND  ENROLL  KEY  SETUP  </span><span class="hd">[REBOOT]</span><span class="dim">  VERIFY  TUNE  MEASURE</span>`,
@@ -221,45 +227,23 @@ PERSIST    <span class="ok">verified by the router: new boot identity, owned bas
 
     tuned: `<span class="hd">CONTINUUM / SETUP</span>
 <span class="dim">--------------------------------------------------------------</span>
-<span class="hi">STEP 8 OF 8   MEASURE</span>
+<span class="hi">STEP 7 OF 8   TUNE</span>
 
-One upload measurement across the WAN: idle probes, then the same
-probes while uploading. Only an upload crosses the shaped queue.
-Nothing on the router is written.
+Next: write ONE root qdisc and read it back from the router.
 
-PREFLIGHT  tc present; eth0 root queue now: pfifo_fast
-QDISC      cake &lt;N&gt; kbit/s on eth0
-READBACK   <span class="ok">verified on the router</span>: qdisc cake 8001: root bandwidth &lt;N&gt;Kbit
+Router  en0:192.168.50.1   Phase  network_qualification_required
 
-<span class="hd">[Enter] Run the upload measurement    [c] Change target</span>
-<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  </span><span class="hd">[MEASURE]</span><span class="dim"></span>`,
+PREFLIGHT  tc present; eth0 root queue now: qdisc pfifo_fast 0: root
 
-    measured: `<span class="hd">CONTINUUM / SETUP</span>
-<span class="dim">--------------------------------------------------------------</span>
-<span class="hi">STEP 8 OF 8   MEASURE</span>
+WHY IT STOPPED
+  qdisc_cake_unavailable
 
-The measurement below is claimable. Qualifying records it as the
-LOAD gate; only a run taken after the last change can count.
+WHAT TO DO
+  This firmware's tc has no CAKE queue, so Continuum cannot shape
+  here. Nothing was written; steps 1-6 stand. Press Esc to stop.
 
-MEASURED   <span class="ok">claimable</span>: 20 idle and 20 loaded samples
-EVIDENCE   ~/.config/continuum/device/measure-&lt;ts&gt;.json
-
-<span class="hd">[Enter] Qualify with this measurement</span>
-<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  </span><span class="hd">[MEASURE]</span><span class="dim"></span>`,
-
-    ready: `<span class="hd">CONTINUUM / SETUP</span>
-<span class="dim">--------------------------------------------------------------</span>
-<span class="hi">STEP 8 OF 8   SETUP COMPLETE</span>
-
-Every gate is earned; the panels hold the evidence.
-
-Monitor  <span class="ok">monitoring</span>, pid &lt;pid&gt;, &lt;n&gt; samples every 15000 ms
-
-Router  en0:192.168.50.1   Phase  ready   Key  verified
-
-<span class="hd">[Enter] Refresh    [u] Undo the shaping</span>
 <span class="dim">[Esc] Quit    [a] Advanced panels</span>
-<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  </span><span class="hd">[TUNE]</span><span class="dim">  MEASURE</span>`,
   };
 
   const TUI_CUES = [
@@ -274,8 +258,6 @@ Router  en0:192.168.50.1   Phase  ready   Key  verified
     { t: 130, id: "waiting" },
     { t: 139, id: "persist" },
     { t: 145, id: "tuned" },
-    { t: 155, id: "measured" },
-    { t: 163, id: "ready" },
   ];
 
   CUES.forEach((c) => {
@@ -639,7 +621,6 @@ Router  en0:192.168.50.1   Phase  ready   Key  verified
 
     congestion = 0;
     if (t >= 14 && t < 44) congestion = smoother(14, 22, t) * (1 - smoother(38, 44, t));
-    else if (t >= 147) congestion = 0;
     else congestion = 0.12;
 
     const cageOn = smoother(115, 124, t);
@@ -682,7 +663,7 @@ Router  en0:192.168.50.1   Phase  ready   Key  verified
     screen.material.opacity = t < 28 ? 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(t * 6)) : (t < 44 ? 0.12 : 0.28);
     screen.material.color.set(t < 44 && t > 20 ? 0xc9a227 : 0x7ec9d4);
 
-    counter.classList.toggle("show", t >= 165 && t < 175);
+    counter.classList.toggle("show", false);
     callN.textContent = "0";
 
     titles.classList.toggle("show", t < 5.6 || (t >= 36.5 && t < 43.5));

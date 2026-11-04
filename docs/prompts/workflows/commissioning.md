@@ -25,7 +25,11 @@ firewall, Wi-Fi, VPN and mesh settings are outside this capability.
 The native transaction saves a target-bound private backup, exercises independent
 lease expiry, changes only selected services, checks process/core readback, and
 retains a recovery baseline before acknowledging. A failure or an unknown effect
-requires inspect/restore reconciliation; never replay an unresolved apply.
+requires inspect/restore reconciliation; never replay an unresolved apply. Once
+restore returns baseline_restored, that earlier apply is resolved: when the owner
+asked for commissioning, apply again in the same run instead of stopping.
+apply is refused with reconcile_existing_baseline_before_apply while an earlier
+apply is unresolved; restore is the reconciliation it asks for.
 
 A baseline-applied result is not permission to reboot. Ask the owner; only the
 separate confirmed reboot operation can dispatch it. verify checks persistence

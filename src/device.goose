@@ -214,14 +214,16 @@ fn device_set_mode(directory: const u8[:], mode: const u8[:]) -> const u8[:] {
 }
 
 fn device_select(directory: const u8[:], observed: const u8[:], candidate: const u8[:],
-        stem: const u8[:], port: i64, existing_credentials: bool = false) -> bool {
+        stem: const u8[:], port: i64, existing_credentials: bool = false, reset_proven: bool = false) -> bool {
     if !valid_id(candidate, 64) || !valid_id(stem, 27) || port < 1 || port > 65535 || !device_open(directory, 1) { return false; }
     var old = DeviceState {};
     // Re-selecting the same candidate is the owner's recovery action after a
     // factory reset: the saved binding is stale (its minted admin is gone) and
     // the only way back to the ceremony is to discard it. A different candidate
     // still cannot clobber a live binding; selection requires an unbound record.
-    if !device_load(old) || (old.candidate_id.len > 0 && old.phase != "selected" && old.candidate_id != candidate) {
+    // reset_proven: the bound router refused the saved admin password, so the
+    // binding is stale even if the router is now reached over another link.
+    if !device_load(old) || (old.candidate_id.len > 0 && old.phase != "selected" && old.candidate_id != candidate && !reset_proven) {
         ct_device_close(); return false;
     }
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
@@ -437,6 +439,25 @@ fn device_qualify(directory: const u8[:], evidence: const u8[:], execute: bool) 
     return 0;
 }
 
+// Whether this host still holds an address in the router's /24 on the bound
+// interface. A Wi-Fi control link that lost its association holds none.
+fn device_link_holds(d: DeviceState) -> bool {
+    let prefix = router_prefix(d.connection.host);
+    if prefix.len == 0 { return true; }
+    let host = discover_host();
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(host, doc, decoded);
+    let interfaces = json::member(root, "interfaces");
+    if !root || !interfaces { return true; }
+    var link = interfaces.first;
+    while link {
+        let name, n = json::as_string(json::member(link, "name"));
+        let address, a = json::as_string(json::member(link, "address"));
+        if n && a && name == d.connection.interface_id && address.len > prefix.len && address[..prefix.len] == prefix { return true; }
+        link .= link.next;
+    }
+    return false;
+}
 fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i64 {
     if !device_open(directory, 1) { print("DEVICE_REFUSED binding busy or private storage unavailable"); return 1; }
     var d = DeviceState {};
@@ -451,7 +472,15 @@ fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i6
     if action == "revoke" && execute {
         d.setup_approved = false; d.reason = "owner_revoked_standing_device_permission"; ok = true;
     } else if action == "inspect" || action == "authorize" {
-        let observed = device_inventory(d, action == "authorize");
+        var observed = device_inventory(d, action == "authorize");
+        // After a reboot the router's radios return on their own schedule and
+        // macOS does not always rejoin them (seen live: en0 left unassociated).
+        // When this host has lost its address on the router's link, rejoin the
+        // renamed Wi-Fi; the protected read afterwards is still the proof.
+        if !observed.authenticated && d.phase == "reboot_pending" && d.connection.rejoin &&
+                !device_link_holds(d) && leap_rejoin_renamed(d.connection) {
+            observed = device_inventory(d, action == "authorize");
+        }
         if observed.authenticated && device_identity(d, observed.receipt) {
             if d.phase == "selected" || d.phase == "enrolling" { d.phase = "enrolled"; }
             ok = true;

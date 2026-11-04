@@ -22,7 +22,7 @@ extern fn ct_resource_root_enter() -> i32;
 
 // One place for the released version. Bump here and in CHANGELOG.md together.
 fn version_line() -> const u8[:] {
-    return "continuum 0.2.4";
+    return "continuum 0.2.5";
 }
 
 // The status entrypoint reports each module's implementation state. Calling
@@ -265,7 +265,7 @@ fn main() {
         if argv.len == 4 && argv[3] != "--execute" { exit(2); }
         if argv[2] == "setup" {
             let report = continuum::run_device_agent(loop_config("MODEL_API_KEY"), continuum::setup_directory(),
-                "Commission the selected device under my standing device permission: apply the owned baseline, preserving services I use, and read it back. The owner policy and a fresh inventory are already in context. Do not reboot it.", argv.len == 4);
+                "Commission the selected device under my standing device permission: apply the owned baseline and read it back. Disable each optional service that serves nothing here (no running process and not protected by owner_policy); keep any that is running or protected. The owner policy and a fresh inventory are already in context. Do not reboot it.", argv.len == 4);
             print(continuum::device_agent_record(report));
             if !report.ok { exit(1); }
             return;

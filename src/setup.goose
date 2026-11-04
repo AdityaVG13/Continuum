@@ -920,7 +920,11 @@ fn setup_wrap(out: u8[>..]&, text: const u8[:], width: i64) {
     }
 }
 fn setup_wizard_advice(out: u8[>..]&, step: i64, reason: const u8[:]) {
-    if setup_contains(reason, "already set up") {
+    if setup_contains(reason, "probably reset") {
+        out.append("  Connect to the router (cable, or its Wi-Fi: a reset ASUS shows\n");
+        out.append("  ASUS_XX), then press Enter to set it up again from step 2.\n");
+        out.append("  Nothing is written to the router until you confirm there.\n");
+    } else if setup_contains(reason, "already set up") {
         out.append("  Take it over as it is: press p and type the admin password this\n");
         out.append("  router already uses. Continuum verifies it, stores it in the OS\n");
         out.append("  vault, and continues -- nothing on the router is changed.\n\n");
@@ -938,6 +942,9 @@ fn setup_wizard_advice(out: u8[>..]&, step: i64, reason: const u8[:]) {
     } else if setup_contains(reason, "has not answered") {
         out.append("  Check the router's power and cable. When it answers again, press\n");
         out.append("  Enter to verify persistence.\n");
+    } else if setup_contains(reason, "qdisc_cake_unavailable") {
+        out.append("  This firmware's tc has no CAKE queue, so Continuum cannot shape\n");
+        out.append("  here. Nothing was written; steps 1-6 stand. Press Esc to stop.\n");
     } else if setup_contains(reason, "qdisc_tool_unavailable") {
         out.append("  This firmware has no tc, so it cannot host the shaping queue.\n");
         out.append("  Nothing was written. Press Esc to stop here.\n");
@@ -1071,13 +1078,16 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
             out.append("\nRAW OUTPUT (i hides this)\n");
             var raw_tail: u8[>..] = [];
             var ri: i64 = if details.len > 900 { details.len - 900 } else { 0 };
+            if ri > 0 { var k: i64 = ri; while k < details.len && k < ri + 200 && details[k - 1] != 10 { k += 1; } if k < ri + 200 { ri = k; } }
             while ri < details.len { raw_tail.push(details[ri]); ri += 1; }
             out.append(raw_tail);
         }
     } else if details.len > 0 {
         out.append("\n");
         var tail: u8[>..] = [];
-        var i: i64 = if details.len > 600 { details.len - 600 } else { 0 };
+        // Newest output last; never start mid-line.
+        var i: i64 = if details.len > 1400 { details.len - 1400 } else { 0 };
+        if i > 0 { var k: i64 = i; while k < details.len && k < i + 200 && details[k - 1] != 10 { k += 1; } if k < i + 200 { i = k; } }
         while i < details.len { tail.push(details[i]); i += 1; }
         out.append(tail);
     }
@@ -1445,10 +1455,29 @@ fn run_setup_tui() -> bool {
                 let offered = enter || (key == 'k' && wstep == 3) || (key == 'u' && wstep == 0) ||
                     (wstep == 1 && key >= '1' && key <= '9') ||
                     (key == 'c' && ((wstep == 7 && qos_checked) || (wstep == 8 && evidence.len == 0)));
+                // A step that found the saved admin password refused (a factory
+                // reset since enrollment) offers Enter to start over at step 2.
+                let was_reset = step_failed && setup_contains(fail_reason, "probably reset");
                 if offered {
                 notice = [];
                 step_failed = false; show_raw = false; fail_reason = [];
-                if wstep == 1 {
+                if was_reset && enter && wstep != 1 && wstep != 2 {
+                    network = discover_host(); labels = setup_identify(network); observed_wall_ms = time_ns() / 1000000;
+                    var stem: u8[..27] = "Continuum";
+                    if wd.connection.ssid_stem.len > 0 { stem = wd.connection.ssid_stem; }
+                    // The router may now be reached over another link (cable
+                    // instead of Wi-Fi), so prefer the one supported router in reach.
+                    var pick: u8[>..] = [];
+                    let marked = setup_marked(network, labels);
+                    if marked.len > 0 { pick.append(marked); } else { pick.append(wd.candidate_id); }
+                    if device_select(setup_directory(), network, pick, stem, wd.connection.port, false, true) {
+                        settled = false; tuned = false; qos_checked = false; evidence = [];
+                        notice.append("Starting over at step 2 for the reset router. Nothing has been written to it yet.");
+                    } else {
+                        step_failed = true;
+                        fail_reason.append("the router no longer accepts Continuum's admin password; it was probably reset to factory settings, and it is not in reach right now");
+                    }
+                } else if wstep == 1 {
                     var ids: u8[..64][>..] = []; var kinds: u8[>..] = [];
                     setup_candidates(network, ids, kinds);
                     let marked = setup_marked(network, labels);
@@ -1807,8 +1836,14 @@ fn run_setup_tui() -> bool {
                             let line = setup_line_with(text, "\"summary\"");
                             let root, err = json::parse(line, doc, decoded);
                             let summary, s = json::as_string(json::member(root, "summary"));
-                            if s { details.append("META SAID  "); details.append(summary); details.append("\n"); }
+                            // The receipt first: it is what counts, and it must stay on
+                            // screen. Meta's own report follows, cut at a line end.
                             details.append("RECEIPT    baseline applied; runtime and recovery verified by the router\n");
+                            if s {
+                                var cut: i64 = summary.len;
+                                if cut > 1100 { cut = 1100; while cut > 0 && summary[cut - 1] != 10 { cut -= 1; } }
+                                details.append("\nMETA SAID\n"); details.append(summary[..cut]); details.append("\n");
+                            }
                         }
                     } else if finished == 5 {
                         if after.phase == "reboot_pending" {
@@ -1890,6 +1925,10 @@ fn run_setup_tui() -> bool {
                     }
                     if step_failed {
                         if fail_reason.len == 0 { fail_reason = setup_failure_reason(text); }
+                        if setup_contains(text, "protected_authentication_refused") {
+                            fail_reason = [];
+                            fail_reason.append("the router no longer accepts Continuum's admin password; it was probably reset to factory settings");
+                        }
                         details = []; details.append("STEP FAILED\n\n"); details.append(text);
                     }
                 } else {

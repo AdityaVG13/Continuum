@@ -307,7 +307,7 @@ struct CommissionBootstrapGuard {
             close(fds[1]); close(0); close(1); close(2);
             pollfd p{fds[0], POLLIN | POLLHUP, 0};
             int rc;
-            do { rc = poll(&p, 1, 120000); } while (rc < 0 && errno == EINTR);
+            do { rc = poll(&p, 1, 300000); } while (rc < 0 && errno == EINTR);
             char verdict = 0;
             ssize_t n = rc > 0 ? read(fds[0], &verdict, 1) : 0;
             close(fds[0]);
@@ -477,8 +477,18 @@ std::string commission_qdisc_apply(const std::string &iface, const std::string &
     const std::string shape = mode == "cake"
         ? "cake bandwidth " + std::to_string(kbps) + "kbit overhead " + std::to_string(overhead)
         : "fq_codel limit 10240";
-    return "set -eu\n"
-        "tc qdisc replace dev " + iface + " root " + shape + "\n"
+    // A refused replace is data, not a bare exit 1 (seen live on a GT-AX11000:
+    // "ssh_program_exit_1" with nothing to act on): tc's own first lines come
+    // back framed so the adapter can name the cause. Some vendor kernels ship
+    // CAKE as a module that is not loaded at boot.
+    return std::string("set -eu\n") +
+        (mode == "cake" ? "modprobe sch_cake >/dev/null 2>&1 || true\n" : "") +
+        "if ! ct_err=$(tc qdisc replace dev " + iface + " root " + shape + " 2>&1); then\n"
+        " printf 'CT_DATA_BEGIN\\nqdisc_apply=refused\\n'\n"
+        " printf '%s\\n' \"$ct_err\" | head -n 3\n"
+        " printf 'CT_DATA_END\\n'\n"
+        " exit 0\n"
+        "fi\n"
         "printf 'CT_DATA_BEGIN\\n'\n"
         "tc qdisc show dev " + iface + "\n"
         "printf 'CT_DATA_END\\n'\n";
@@ -778,35 +788,37 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     std::string transport_diagnostic;
     // Only a failure before any password reached the router (refused, timed
     // out, unroutable, closed before the prompt) is retried: it had no effect,
-    // and it is what a still-restarting daemon produces. Anything after the
-    // password is not retried, so a wrong password never becomes repeated
-    // login failures. Retries stop 30 s after the first attempt: the bootstrap
-    // guard above restores SSH on its own 120 s clock, and the apply path
-    // after this inventory still needs its share of that window.
-    bool inventoried = false;
-    const auto retry_until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    for (int attempt = 0; attempt < 4 && !inventoried; ++attempt) {
-        if (attempt) {
-            auto left = std::chrono::duration_cast<std::chrono::seconds>(
-                retry_until - std::chrono::steady_clock::now()).count();
-            if (left < 1) break;
-            // Wait for the daemon only after a failure, so a transport that
-            // answers at once never pays for the probe.
-            if (!commission_wait_port(connection.host, connection.source, connection.port, left < 10 ? (int)left : 10))
-                poll(nullptr, 0, 1000);
+    // and it is what a still-restarting daemon produces after restart_sshd
+    // (seen live on a GT-AX11000). Anything after the password is not retried,
+    // so a wrong password never becomes repeated login failures. Each use waits
+    // at most 30 s past its first attempt; the bootstrap guard's clock above
+    // bounds the whole transaction.
+    auto runtime_read = [&](std::string &dest) -> bool {
+        const auto retry_until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            if (attempt) {
+                auto left = std::chrono::duration_cast<std::chrono::seconds>(
+                    retry_until - std::chrono::steady_clock::now()).count();
+                if (left < 1) return false;
+                // Wait for the daemon only after a failure, so a transport that
+                // answers at once never pays for the probe.
+                if (!commission_wait_port(connection.host, connection.source, connection.port, left < 10 ? (int)left : 10))
+                    poll(nullptr, 0, 1000);
+            }
+            transport_diagnostic.clear();
+            if (ct_commission_ssh(connection, commission_runtime_program(), dest, 20, &transport_diagnostic)) return true;
+            auto ends = [&](const char *suffix) {
+                size_t n = std::char_traits<char>::length(suffix);
+                return transport_diagnostic.size() >= n &&
+                    transport_diagnostic.compare(transport_diagnostic.size() - n, n, suffix) == 0;
+            };
+            if (transport_diagnostic.rfind("ssh_before_program_exit_", 0) != 0 ||
+                !(ends("_connection_refused") || ends("_timeout") || ends("_no_route") || ends("_closed_by_router")))
+                return false;
         }
-        transport_diagnostic.clear();
-        inventoried = ct_commission_ssh(connection, commission_runtime_program(), runtime_before, 20, &transport_diagnostic);
-        auto ends = [&](const char *suffix) {
-            size_t n = std::char_traits<char>::length(suffix);
-            return transport_diagnostic.size() >= n &&
-                transport_diagnostic.compare(transport_diagnostic.size() - n, n, suffix) == 0;
-        };
-        if (inventoried || transport_diagnostic.rfind("ssh_before_program_exit_", 0) != 0 ||
-            !(ends("_connection_refused") || ends("_timeout") || ends("_no_route") || ends("_closed_by_router")))
-            break;
-    }
-    if (!inventoried)
+        return false;
+    };
+    if (!runtime_read(runtime_before))
         return fail(transport_diagnostic.empty() ? "privileged_runtime_inventory_unavailable" : transport_diagnostic.c_str());
     if (!commission_runtime_valid(runtime_before)) return fail("privileged_runtime_inventory_unqualified");
     if (action == "qos") {
@@ -914,6 +926,16 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
                     verified = true;
                 }
             }
+        }
+        if (ran && after.find("qdisc_apply=refused") != std::string::npos) {
+            // tc refused before installing anything; its words stay private
+            // beside the recovery baseline for diagnosis.
+            (void)commission_save(directory + "/qos-refused.txt", after, true);
+            return fail(mode == "cake" && (after.find("nknown qdisc") != std::string::npos ||
+                                           after.find("cake") != std::string::npos ||
+                                           after.find("not supported") != std::string::npos ||
+                                           after.find("No such file") != std::string::npos)
+                ? "qdisc_cake_unavailable" : "qdisc_apply_refused");
         }
         if (!verified) {
             // A failed or misread apply may still have reached the device.
@@ -1044,8 +1066,10 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     armed = false;
     if (!commission_ssh_settings(s, access, user, password)) return fail("access_after_recovery_drill_failed");
     std::string after_drill;
-    if (!ct_commission_ssh(connection, commission_runtime_program(), after_drill, 20) ||
-        !commission_runtime_valid(after_drill)) return fail("runtime_after_recovery_drill_failed");
+    // The drill's expiry put SSH back to its original setting and the line
+    // above restarted it, so this read meets the same restarting daemon.
+    if (!runtime_read(after_drill) || !commission_runtime_valid(after_drill))
+        return fail("runtime_after_recovery_drill_failed");
     for (size_t i : drill) {
         const auto &f = commission_features()[i];
         if ((commission_process_present(runtime_before, f.process1) && !commission_process_present(after_drill, f.process1)) ||

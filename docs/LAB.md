@@ -81,7 +81,7 @@ command-line tools, which is why the join is a menu-bar click.
 | --- | --- | --- | --- |
 | start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` (table above) | the GT-AX is never marked |
 | 1 BIND | `Enter` | `STEP 2 OF 8` (nothing written to the router) | |
-| 2 ENROLL, factory unit | `Enter`, `Enter` | about a minute, then `STEP 3 OF 8`; Wi-Fi renamed to the stem, the Mac rejoins it by itself | any other `WHY IT STOPPED` |
+| 2 ENROLL, factory unit | `Enter`, `Enter` | 2-5 minutes, then `STEP 3 OF 8`; Wi-Fi renamed to the stem, the Mac rejoins it by itself | any other `WHY IT STOPPED` |
 | 2 ENROLL, configured unit | `Enter`, `Enter`, then `p`, admin password, `Enter` | `WHY IT STOPPED ... already set up`, then `Password accepted` and `STEP 3 OF 8`; zero writes | the password is refused twice |
 | 3 KEY | `Enter`, key, `Enter`, `Enter` (saves it in the Keychain; `n` = this session only) | `CHOOSE THE META MODEL`: the models this key can use, with Meta's prices | `refused this key while listing`: `k` enters another |
 | 3 MODEL | `Enter` keeps the marked `muse-spark-1.3` (or a number) | `REASONING EFFORT` with the cap and step bound per level | |
@@ -89,7 +89,7 @@ command-line tools, which is why the join is a menu-bar click.
 | 4 SETUP | `Enter`, `Enter` | Meta works (bounded calls), then `STEP 5 OF 8` with `RECEIPT    baseline applied; runtime and recovery verified by the router` | `WHY IT STOPPED` (Meta finishing without a verified baseline counts as a failure) |
 | 5 REBOOT | `Enter`, `Enter` | `WAITING FOR THE ROUTER`, `Went down   yes`, then `The router stopped answering and is back` | `the router has not answered for 10 minutes` |
 | 6 VERIFY | `Enter`, `Enter` | `PERSIST    verified by the router` and `STEP 7 OF 8`; no model call | `reboot_not_observed`: power-cycle the unit, then `Enter` |
-| 7 TUNE, preflight | `Enter`, `Enter` | `PREFLIGHT  tc present; eth0 root queue now: ...`; nothing written | `qdisc_tool_unavailable`; `already_managed` (turn off Adaptive QoS, then `Enter`) |
+| 7 TUNE, preflight | `Enter`, `Enter` | `PREFLIGHT  tc present; eth0 root queue now: ...`; nothing written | `qdisc_tool_unavailable`; `already_managed` (turn off Adaptive QoS, then `Enter`); on apply, `qdisc_cake_unavailable` (stock GT-AX11000 388 firmware: `tc` has no CAKE) |
 | 7 TUNE, apply | `Enter`, `Ctrl-U` + upload kbit/s, `Enter`, `Ctrl-U` + `eth0` (`ppp0` on PPPoE), `Enter`, `Enter` | `QDISC      cake <N> kbit/s on eth0` and `READBACK   verified on the router`, `STEP 8 OF 8` | no `READBACK   verified`; `readback` refusals roll back: `c`, lower rate |
 | 8 MEASURE | `Enter`, `host:port/ping`, `Enter`, `Ctrl-U` + `/bulk`, `Enter`, `Enter` | `MEASURED   claimable: ...` and the `EVIDENCE` path | unclaimable: `c` fixes the target |
 | 8 QUALIFY | `Enter`, `Enter` | `SETUP COMPLETE` | any refusal |

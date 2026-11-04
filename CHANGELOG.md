@@ -3,6 +3,35 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.5] - 2026-11-04
+
+- **Setup no longer meets a restarting SSH daemon mid-apply.** The recovery
+  drill puts SSH back to its original setting and the apply turns it on again;
+  the read right after that now gets the same bounded wait-and-retry as the
+  first one. The host-side SSH guard allows 300 s (was 120 s), longer than a
+  worst-case apply.
+- An apply that failed before writing its recovery baseline (so before any
+  router write) leaves the router enrolled, so the next try is not refused
+  with `reconcile_existing_baseline_before_apply`. After a restore, Meta is
+  told to apply again in the same run instead of stopping.
+- **A router reset after enrollment is recognized.** A step that finds the
+  saved admin password refused says the router was probably reset, and Enter
+  starts over at step 2 (over Wi-Fi or a cable). Meta is not called against a
+  router that refuses the password.
+- **The reboot step rejoins the router's Wi-Fi.** After the reboot macOS left
+  Wi-Fi unassociated (seen live), so the wait never ended. While waiting, a
+  host that has lost its address on the router's link rejoins the renamed
+  Wi-Fi; the protected read afterwards is still the proof.
+- Meta's setup brief: disable optional services that serve nothing (no
+  running process, not protected by owner policy) and keep the rest. Live on
+  the GT-AX11000: Samba and DLNA off, `changed_services=2`, runtime, recovery
+  and (after the reboot) persistence verified by the router.
+- Step 4's result shows the router's receipt first, then Meta's report cut
+  at a line end, never starting mid-sentence.
+- Step 7 names a firmware without CAKE (`qdisc_cake_unavailable`; the stock
+  GT-AX11000 `tc` answers `Unknown qdisc "cake"`) instead of
+  `ssh_program_exit_1`. Nothing is written in that case.
+
 ## [0.2.4] - 2026-11-04
 
 - The SSH retry is bounded to 30 s and only covers failures before the
