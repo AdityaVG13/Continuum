@@ -3,6 +3,15 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.7] - 2026-11-04
+
+- **Enrollment no longer gives up on the first refused login after the Wi-Fi
+  rename.** On a GT-AX11000 the first check of the new admin password, right
+  after the Mac rejoined the renamed Wi-Fi, was refused; the same password
+  worked minutes later with nothing changed. Continuum reported
+  `AdminAuthFailed` and told the owner to paperclip-reset. It now keeps
+  checking for up to 5 minutes before concluding the password was refused.
+
 ## [0.2.6] - 2026-11-04
 
 - Relaunching after an interrupted enrollment retries it as is (rejoining the

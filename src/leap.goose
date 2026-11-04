@@ -946,24 +946,44 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
         joined_new = true;
     }
 
+    // A refused or failed login right after the rejoin is not yet evidence:
+    // seen live on a GT-AX11000 (0.2.6), the first verify after the radio
+    // restart was refused and the same staged credential authenticated a few
+    // minutes later with nothing changed. AdminAuthFailed tells the owner to
+    // paperclip-reset, so it needs a refusal that persists: poll up to ~5
+    // minutes (60 x 5 s) before classifying. radio_wait_sec 0 (loopback bench)
+    // keeps one attempt.
     var authenticated = false;
     if joined_new {
         req.clear();
         if !asus_verify_request(cfg, bind, req) {
             return fail_report("verify", "request fields invalid");
         }
-        resp.clear();
-        rc = leap_call(3, req, resp);
-        if rc != 0 {
-            return fail_report("verify", leap_reason(rc));
+        let attempts: i64 = if cfg.radio_wait_sec <= 0 { 1 } else { 60 };
+        var attempt: i64 = 0;
+        var last_reason: u8[..256] = "";
+        while attempt < attempts && !authenticated {
+            if attempt > 0 {
+                leap_sleep_ms(5000);
+                print("leap: the router has not accepted the new admin password yet; checking again (", attempt + 1, " of ", attempts, ")");
+            }
+            resp.clear();
+            rc = leap_call(3, req, resp);
+            if rc != 0 { last_reason = leap_reason(rc); }
+            else {
+                let ver = parse_verify_receipt(resp);
+                if !ver.ok { last_reason = ver.reason; }
+                else {
+                    last_reason = "";
+                    authenticated = ver.authenticated;
+                    print("leap: verify authenticated=", authenticated, " wl0=", ver.wl0_ssid);
+                }
+            }
+            attempt++;
         }
-        let ver = parse_verify_receipt(resp);
-        if !ver.ok {
-            return fail_report("verify", ver.reason);
+        if !authenticated && last_reason.len > 0 {
+            return fail_report("verify", last_reason);
         }
-        authenticated = ver.authenticated;
-        print("leap: verify authenticated=", authenticated,
-            " wl0=", ver.wl0_ssid);
     }
 
     report.outcome = leap_classify_from(joined_new, authenticated, old_answers);

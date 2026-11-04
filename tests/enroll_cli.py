@@ -144,9 +144,13 @@ def main():
             # rebuild the boundary on the now-factory unit instead of reporting
             # the old phase as success.
             reset_port = free_port()
+            # The reset unit also refuses the first login after its first-run
+            # apply, as the physical unit did: verify must wait it out instead of
+            # reporting AdminAuthFailed (which sends the owner to the paperclip).
             reset = subprocess.Popen(
                 [double_binary, str(reset_port)],
-                env=dict(os.environ, ROUTER_PASSWORD=FIXTURE_PASSWORD, ROUTER_WIZARD="1"),
+                env=dict(os.environ, ROUTER_PASSWORD=FIXTURE_PASSWORD, ROUTER_WIZARD="1",
+                         ROUTER_WIZARD_REFUSE_AFTER_APPLY="1"),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 for _ in range(60):

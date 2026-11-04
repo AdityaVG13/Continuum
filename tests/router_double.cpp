@@ -529,7 +529,16 @@ bool asus_authed(const Request &rq) {
 }
 
 // --------------------------------------------------------- ASUS surface
+// ROUTER_WIZARD_REFUSE_AFTER_APPLY=N: the first N logins after the first-run
+// apply are refused even with the right password, as the GT-AX11000 did live
+// while its radios and httpd settled (0.2.6). Proves verify waits, not judges.
+int g_refuse_after_apply = 0;
 void asus_login(int fd, const Request &rq) {
+    if (g_refuse_after_apply > 0) {
+        g_refuse_after_apply--;
+        text(fd, 200, "<html>Main_Login</html>");
+        return;
+    }
     auto form = parse_qs(rq.body);
     std::string auth = b64_decode(form["login_authorization"]);
     size_t colon = auth.find(':');
@@ -618,6 +627,8 @@ void asus_apply(int fd, const Request &rq) {
     G.wizard_open = false;  // passwordless trust ends with setup
     G.ssid = G.nvram["wl0_ssid"];
     G.revision += 1;
+    if (const char *refuse = std::getenv("ROUTER_WIZARD_REFUSE_AFTER_APPLY"))
+        g_refuse_after_apply = std::atoi(refuse);
     json(fd, 200, "{}");
 }
 
