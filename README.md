@@ -302,8 +302,9 @@ completed work with `.build/continuum --resume <run-id>`, even with no key.
 Recovery must use the same checkout inputs and task-model setting; it neither
 replays an intervention nor retries an uncertain external effect.
 `make web-e2e-run` exercises the shared runtime with explicitly authored
-responses and no provider calls. [The continuity assessment](docs/progress/continuity.md)
-separates this working slice from the larger unproven product thesis.
+responses and no provider calls. `docs/STATUS.md` separates this working slice
+from the larger unproven product thesis; the session continuity ledger is kept
+locally (`docs/progress/`) and is not published.
 
 ## Repository layout
 

@@ -18,6 +18,11 @@ import .takeover;
 import .measure;
 import os;
 
+// One place for the released version. Bump here and in CHANGELOG.md together.
+fn version_line() -> const u8[:] {
+    return "continuum 0.1.0";
+}
+
 // The status entrypoint reports each module's implementation state. Calling
 // the operations below exercises their types; unconfigured calls fail closed
 // before any network or mutation.
@@ -392,11 +397,15 @@ fn main() {
         show_router();
         return;
     }
+    if argv.len == 2 && argv[1] == "--version" {
+        print(version_line());
+        return;
+    }
     if argv.len == 1 || (argv.len == 2 && argv[1] == "--status") {
         show_status();
         return;
     }
-    print("Usage: continuum [--tui] | --status | --sim | --daemon | --loop");
+    print("Usage: continuum [--tui] | --status | --version | --sim | --daemon | --loop");
     print("       continuum --serve [sample-count] (live monitoring; opt-in Meta uses owner-scoped device capabilities)");
     print("       continuum --discover | --discover-model | --test-meta");
     print("       continuum --device-select <candidate-id> <ssid-stem> [port [--existing-credentials]]");

@@ -1,0 +1,44 @@
+# Changelog
+
+All notable changes to Continuum. This project is pre-1.0: surfaces change, and
+a capability listed here is listed with its evidence in `docs/STATUS.md`.
+
+## [0.1.0] - 2026-11-04
+
+First release. Continuum is an owner-controlled management plane for a router
+the owner physically holds: Meta proposes and explains, the product admits or
+refuses, and every effect is typed, reversible and recorded.
+
+### What is in it
+
+- **Owner-selected device lifecycle.** Discovery reads this host only. Selection
+  binds one observed target; inspection, authorization, enrollment, commissioning,
+  runtime qualification, restore and reboot are separate, separately approved
+  steps. Standing device permission never authorizes a reboot.
+- **Factory enrollment that creates its own credential.** A factory-reset unit has
+  no admin password. `enroll` generates the admin credential and PSK, stages them
+  in the OS credential vault before the first write, submits the vendor first-run
+  form, and proves a protected read under the new credential. A bare `enroll`
+  without `--execute` is refused; a retry inspects and never replays the form.
+- **Protected commissioning.** Typed `apply`/`restore` over the vendor's own web
+  form plus a bounded SSH channel, with before/after receipts, an independent
+  readback, a durable before-image, and refusal on drift.
+- **Real traffic control, gated.** Read-only `qos-status` preflight; bounded CAKE
+  profiles applied and independently read back, with typed refusal when `tc` is
+  absent, the root qdisc is vendor-managed, the profile is out of bounds, or the
+  device does not honor the requested rate.
+- **Evidence instead of adjectives.** `--measure` samples idle and loaded HTTP
+  RTT and goodput and refuses to certify a run it did not sample; `--upload` is
+  the load direction a router's egress shaping can influence.
+- **Continuity.** Completed work is committed atomically and recovered from its
+  exact inputs; uncertain external effects are not replayed.
+- **A five-section TUI** for the owner: device, model, network, permissions and
+  results, with every disruptive step behind an explicit confirmation.
+
+### What is not proven
+
+- No physical-router run yet in this release. Every router-facing capability is
+  proven against the C++ double and a modeled firmware shell; latency, goodput
+  and "faster" claims remain absent until a physical run is recorded.
+- The binary reads its prompts and schemas relative to the working directory, so
+  an install must carry them and run from its install root.
