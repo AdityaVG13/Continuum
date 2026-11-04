@@ -232,7 +232,13 @@ try:
     expect("STEP 1 OF 8")
     os.write(master, b"a")
     expect("[3] Device")
-    check(b"DEVICE / LIFECYCLE" in output and b"unselected" in output,
+    # Re-select the section so the panel body is drawn again: expect() only
+    # scans bytes that arrive after it is called, and the first frame can
+    # already be in the buffer when the key is written.
+    os.write(master, b"3")
+    expect("DEVICE / LIFECYCLE")
+    check(b"unselected" in output and
+          not (Path(ENV["XDG_CONFIG_HOME"]) / "continuum/device/state.json").exists(),
           "first run lands on the device lifecycle, not a menu, and binds nothing")
     os.write(master, b"2")
     expect("NETWORK / LIVE HOST EVIDENCE")

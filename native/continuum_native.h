@@ -157,6 +157,7 @@ int32_t ct_tui_key(int64_t timeout_ms);
 int32_t ct_tui_key_load(void);
 int32_t ct_tui_key_setup(void);
 int32_t ct_tui_input(ct_bytes label, ct_bytes initial, ct_output out, int64_t *out_len);
+int32_t ct_tui_secret(ct_bytes label, ct_output out, int64_t *out_len);
 int64_t ct_tui_service_start(ct_bytes directory);
 int32_t ct_tui_job_start(ct_bytes mode);
 int32_t ct_tui_job_poll(ct_output out, int64_t *out_len);

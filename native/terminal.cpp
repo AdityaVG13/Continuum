@@ -170,7 +170,7 @@ int edit(const std::string &label, const std::string &initial, bool secret, std:
     value = initial;
     bool invalid = false;
     for (;;) {
-        draw("CONTINUUM / META SETUP\n----------------------------------------\n" + label +
+        draw(std::string("CONTINUUM / ") + (secret ? "PRIVATE INPUT" : "INPUT") + "\n----------------------------------------\n" + label +
              (secret ? "\nPrivate local input; never sent to the model.\n\n " :
                        "\nNon-secret input. Do not enter passwords or API keys.\n\n ") +
              (secret ? std::string(value.size(), '*') : value) +
@@ -282,6 +282,20 @@ int32_t ct_tui_input(ct_bytes label, ct_bytes initial, ct_output out, int64_t *n
                   std::string(initial.data ? reinterpret_cast<const char *>(initial.data) : "", static_cast<size_t>(initial.len)), false, value,
                   static_cast<size_t>(std::clamp<int64_t>(out.capacity, 1, 1024)));
     return rc == CT_OK ? put(out, n, value) : rc;
+}
+// Hidden single-line input that returns the value to the caller instead of
+// binding it to an environment variable: used when the owner supplies an
+// existing device credential (takeover of an already-configured unit).
+int32_t ct_tui_secret(ct_bytes label, ct_output out, int64_t *n) {
+    if (!active || !label.data || label.len < 1 || label.len > 128) return CT_INVALID_ARGUMENT;
+    std::string value;
+    int rc = edit(std::string(reinterpret_cast<const char *>(label.data), static_cast<size_t>(label.len)),
+                  "", true, value,
+                  static_cast<size_t>(out.capacity > 256 ? 256 : out.capacity));
+    if (rc != CT_OK) { wipe(value); return rc; }
+    rc = put(out, n, value);
+    wipe(value);
+    return rc;
 }
 int64_t ct_tui_service_start(ct_bytes directory) {
     if (!active || !directory.data || directory.len <= 0 || directory.len > 1024 ||

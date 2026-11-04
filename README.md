@@ -204,12 +204,15 @@ STEP 8 OF 8   MEASURE
 ```
 
 Every step keeps its own confirm frame, and the footer always shows where you
-are in that path. `[Esc]` hands over to the five panels (Overview, Network,
-Device, Programs, Resident) at any point; nothing is dispatched by leaving.
+are in that path. `[Esc]` quits; `[a]` opens the five panels (Overview, Network,
+Device, Programs, Resident) for the receipts and evidence, and `[Esc]` there
+returns to the wizard.
 
 Several default-route candidates are never guessed: binding one of several
-stays an explicit `[p]` choice. A unit that is already configured makes the
-enrollment ceremony refuse safely, and the wizard moves on instead of looping.
+stays an explicit `[p]` choice. A unit that is already configured is never
+factory-enrolled: the ceremony refuses without writing, and the failure screen
+offers `[p]` to take the unit over with the admin password it already uses --
+read hidden, stored in the OS vault, and proven by a protected read.
 
 From the checkout root, `make tui GOOSE=/absolute/path/to/goose` builds and
 opens the same TUI; `.build/continuum` opens it without a rebuild.

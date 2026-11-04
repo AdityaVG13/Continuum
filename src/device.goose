@@ -322,7 +322,12 @@ fn device_enroll(directory: const u8[:], d: DeviceState&, execute: bool) -> bool
     if !device_save(d) { return false; }
     if d.phase == "selected" || d.phase == "enrolling" {
         var observed = device_inventory(d);
-        if !observed.authenticated && d.phase == "selected" {
+        // A unit that does not answer the staged credential is either factory
+        // (no credential works yet) or configured under a different password.
+        // Either way the ceremony's first act is a read-only factory login: it
+        // refuses a configured unit instead of writing, so an unfinished
+        // attempt may re-probe. Completed enrollment never reaches here.
+        if !observed.authenticated {
             d.phase = "enrolling";
             if !device_save(d) { return false; }
             var cfg = d.connection; cfg.execute = true;

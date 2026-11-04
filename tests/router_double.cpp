@@ -828,6 +828,17 @@ int main(int argc, char **argv) {
         // "session": wizard-open access is already closed (the live
         // post-refused-chpass state); factory login still works.
         G.wizard_open = std::string(wiz) == "1";
+    } else {
+        // An already-configured unit: the first-run wizard is closed, NVRAM is
+        // populated, and the owner's admin password works on the vendor login
+        // exactly as it does on real firmware. This is the takeover fixture.
+        G.nvram = factory_nvram();
+        G.nvram["x_Setting"] = "1";  // configured: the first-run bit is set
+        G.has_nvram = true;
+        G.setup_done = true;
+        G.admin_pw_sha256 = sha256_hex(g_password);
+        G.admin_pw_md5 = md5_hex(g_password);
+        G.wizard_open = false;
     }
     // Localhost by default; ROUTER_BIND only for a deliberate lab LAN.
     const char *bind_env = std::getenv("ROUTER_BIND");

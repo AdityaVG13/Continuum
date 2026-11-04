@@ -20,6 +20,7 @@ import urllib.request
 
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 FIXTURE_PASSWORD = "FactoryFixture99"
+OWNER_PASSWORD = "OwnerOwned77"
 STEM = "LabStem"
 IDENTITY = {"productid": "RT-TEST", "mac": "02:00:00:00:00:01",
             "firmware": "3.0.0.4/test/1"}
@@ -52,6 +53,11 @@ def login_token(port, user, password):
 
 def records(stdout):
     return [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+
+
+def vault_env(ref):
+    """The modeled vault maps a ref to CONTINUUM_SECRET_<REF>, folded like the C seam."""
+    return "CONTINUUM_SECRET_" + "".join(c.upper() if c.isalnum() else "_" for c in ref)
 
 
 def run(binary, env, *args):
@@ -177,6 +183,59 @@ def main():
             finally:
                 reset.terminate()
                 reset.wait(timeout=10)
+            # A unit that is already online is not factory hardware: the ceremony
+            # must refuse without writing, and the password it already uses is
+            # what takes it over. Storing that password where the adapter looks
+            # it up IS the takeover; a protected read then proves it.
+            adopt_port = free_port()
+            adopt_home = scratch / "adopt"
+            adopt_home.mkdir(mode=0o700)
+            configured = subprocess.Popen(
+                [double_binary, str(adopt_port)],
+                env=dict(os.environ, ROUTER_PASSWORD=OWNER_PASSWORD),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(60):
+                    try:
+                        owned = status(adopt_port)
+                        break
+                    except Exception:
+                        time.sleep(0.1)
+                else:
+                    raise SystemExit("ENROLL_CHECK_FAILED the configured double never answered")
+                assert owned["setup_done"] is True, "this fixture must start configured"
+                adopt_env = dict(os.environ, HOME=str(adopt_home),
+                                 XDG_CONFIG_HOME=str(adopt_home / "config"),
+                                 CONTINUUM_DEVICE_FIXTURE="1")
+                chosen = run(binary, adopt_env, "--device-select", "lo0:127.0.0.1", STEM, str(adopt_port))
+                assert chosen.returncode == 0, chosen.stdout + chosen.stderr
+                adopt_ref = records(chosen.stdout)[-1]["connection"]["admin_ref"]
+
+                refused = run(binary, adopt_env, "--device-step", "enroll", "--execute")
+                assert refused.returncode == 1, refused.stdout + refused.stderr
+                stopped = records(refused.stdout)[-1]
+                assert "already set up" in stopped["reason"], stopped
+                assert status(adopt_port)["revision"] == owned["revision"], \
+                    "a refused factory ceremony must not write to a configured unit"
+
+                adopt_env[vault_env(adopt_ref)] = OWNER_PASSWORD
+                # The unfinished attempt left phase=enrolling; a stored credential
+                # must let the step resume instead of refusing forever.
+                resumed = run(binary, adopt_env, "--device-step", "enroll", "--execute")
+                assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+                assert records(resumed.stdout)[-1]["phase"] == "enrolled"
+                taken = run(binary, adopt_env, "--device-step", "inspect")
+                assert taken.returncode == 0, taken.stdout + taken.stderr
+                adopted = records(taken.stdout)[-1]
+                assert adopted["phase"] == "enrolled" and adopted["identity"] == IDENTITY, adopted
+                assert status(adopt_port)["revision"] == owned["revision"], \
+                    "taking over a live unit must not change it"
+                durable = (adopt_home / "config/continuum/device/state.json").read_text()
+                assert OWNER_PASSWORD not in durable, "durable state must not carry the password"
+            finally:
+                configured.terminate()
+                configured.wait(timeout=10)
+
             print("ENROLL_CHECK_GREEN", admin_ref)
         finally:
             double.terminate()

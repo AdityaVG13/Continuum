@@ -64,6 +64,18 @@ int32_t ct_setup_input(setup_slice label, setup_slice initial, setup_slice out, 
     ct_output buffer = {out.data, out.len};
     return ct_tui_input(l, value, buffer, n);
 }
+int32_t ct_setup_secret(setup_slice label, setup_slice out, int64_t *n) {
+    ct_bytes l = {label.data, label.len};
+    ct_output buffer = {out.data, out.len};
+    return ct_tui_secret(l, buffer, n);
+}
+// Store an owner-supplied device credential exactly where the adapter looks it
+// up (the binding's ref). Production resolves this to the OS keychain; the
+// modeled vault used by tests is process-scoped and inherited by the job child.
+int32_t ct_setup_vault_store(setup_slice ref, setup_slice value) {
+    ct_bytes r = {ref.data, ref.len}, v = {value.data, value.len};
+    return ct_vault_store(r, v);
+}
 int32_t ct_setup_job_start(setup_slice mode) {
     ct_bytes task = {mode.data, mode.len}; return ct_tui_job_start(task);
 }
