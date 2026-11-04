@@ -187,13 +187,29 @@ and run `bin/continuum` from the unpacked root, or install it under
 ### Interactive setup
 
 Run `make install` once; it puts `continuum` on `PATH` (`~/.local/bin`).
-Then **`continuum` with no arguments is the whole entry point**: it reads this
-host at startup (local interfaces/routes only, no scan and no provider call),
-opens on the Device panel whenever the installation is not yet ready, and
-`[Enter]` walks the lifecycle — bind the one default-route router, enroll a
-factory unit, or recover a stale binding after a factory reset (re-select +
-ceremony). Several default-route candidates are never guessed: that stays an
-explicit `[p]` choice.
+Then **`continuum` with no arguments is the whole entry point.** It reads this
+host at startup (local interfaces/routes only, no scan and no provider call) and
+opens on a **setup wizard**: one step per screen, one `[Enter]` per step, and
+each screen states exactly what that step will do.
+
+```text
+STEP 1 OF 8   BIND THE ROUTER
+STEP 2 OF 8   ENROLL THE ROUTER
+STEP 3 OF 8   META KEY
+STEP 4 OF 8   SET THE ROUTER UP
+STEP 5 OF 8   REBOOT
+STEP 6 OF 8   VERIFY PERSISTENCE
+STEP 7 OF 8   TUNE
+STEP 8 OF 8   MEASURE
+```
+
+Every step keeps its own confirm frame, and the footer always shows where you
+are in that path. `[Esc]` hands over to the five panels (Overview, Network,
+Device, Programs, Resident) at any point; nothing is dispatched by leaving.
+
+Several default-route candidates are never guessed: binding one of several
+stays an explicit `[p]` choice. A unit that is already configured makes the
+enrollment ceremony refuse safely, and the wizard moves on instead of looping.
 
 From the checkout root, `make tui GOOSE=/absolute/path/to/goose` builds and
 opens the same TUI; `.build/continuum` opens it without a rebuild.

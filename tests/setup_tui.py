@@ -79,6 +79,9 @@ def expect(text, timeout=8):
 monitor = None
 monitor_path = Path(ENV["XDG_CONFIG_HOME"]) / "continuum/service/status.json"
 try:
+    expect("STEP 1 OF 8")
+    check(b"CONTINUUM / SETUP" in output, "first run opens the setup wizard, not a menu")
+    os.write(master, b"\x1b")
     expect("[m] Meta")
     check(not (termios.tcgetattr(slave)[3] & termios.ECHO), "interactive UI disables terminal echo")
     os.write(master, b"m")
@@ -226,6 +229,8 @@ env = dict(ENV, TERM="xterm-256color", NO_COLOR="1")
 process = subprocess.Popen([BIN, "--tui"], stdin=slave, stdout=slave, stderr=slave, env=env)
 output = bytearray()
 try:
+    expect("STEP 1 OF 8")
+    os.write(master, b"\x1b")
     expect("[3] Device")
     check(b"DEVICE / LIFECYCLE" in output and b"unselected" in output,
           "first run lands on the device lifecycle, not a menu, and binds nothing")
@@ -265,7 +270,12 @@ try:
     expect("Enter/x/E/R")
     os.write(master, b"1")
     expect("NEEDS ATTENTION")
-    expect("FIRST RUN")
+    try:
+        expect("FIRST RUN")
+    except AssertionError:
+        # A keystroke can race a full-screen redraw; re-select Overview once.
+        os.write(master, b"1")
+        expect("FIRST RUN")
     check(b"first run" in output.lower() or b"FIRST RUN" in output,
           "overview states first-run step when no device is selected")
     os.write(master, b"q")
@@ -319,6 +329,8 @@ if fixture.exists():
     process = subprocess.Popen([str(fixture.resolve()), "--tui"], stdin=slave, stdout=slave, stderr=slave, env=fixture_env)
     output = bytearray()
     try:
+        expect("STEP 1 OF 8")
+        os.write(master, b"\x1b")
         expect("[m] Meta")
         check(b"not configured" in output.lower(), "new sessions show missing credentials, not a false connected state")
         os.write(master, b"a")

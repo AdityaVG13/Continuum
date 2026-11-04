@@ -442,6 +442,110 @@ fn setup_next_menu(d: DeviceState) -> i64 {
     }
     return 0;
 }
+// Byte search for the one refusal that means "this step is already done":
+// a unit that is already configured has gone past the factory ceremony.
+fn setup_contains(hay: const u8[:], needle: const u8[:]) -> bool {
+    if needle.len == 0 || hay.len < needle.len { return false; }
+    var i: i64 = 0;
+    while i + needle.len <= hay.len {
+        var j: i64 = 0;
+        while j < needle.len && hay[i + j] == needle[j] { j += 1; }
+        if j == needle.len { return true; }
+        i += 1;
+    }
+    return false;
+}
+
+// The setup wizard is the bring-up path: one step at a time, each step stating
+// exactly what it will do. The step is derived from durable device state, so a
+// crash or restart resumes at the first unfinished step.
+fn setup_wizard_step(d: DeviceState, cfg: ModelConfig, bound: bool, rebooted: bool, tuned: bool, settled: bool) -> i64 {
+    if !bound || d.candidate_id.len == 0 { return 1; }
+    // Enrollment is offered until the unit has been seen to be past it: a
+    // factory unit gets set up, and a router that is already configured makes
+    // the ceremony refuse safely -- which settles this step either way.
+    if !d.runtime_verified && !settled { return 2; }
+    if !meta_credentials_available(cfg) { return 3; }
+    if !d.persistence_verified && d.phase != "baseline_applied" { return 4; }
+    if !d.persistence_verified { return if rebooted { 6 } else { 5 }; }
+    if !d.network_load_verified { return if tuned { 8 } else { 7 }; }
+    return 0;
+}
+fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
+        rebooted: bool, tuned: bool, settled: bool, details: const u8[:], notice: const u8[:], busy: bool) {
+    var d = DeviceState {};
+    let bound = device_saved(setup_directory(), d) && d.candidate_id.len > 0;
+    let step = setup_wizard_step(d, cfg, bound, rebooted, tuned, settled);
+    out.append("CONTINUUM / SETUP\n");
+    out.append("--------------------------------------------------------------------------\n");
+    var banner: u8[>..] = [];
+    if step == 1 { banner.append("BIND THE ROUTER"); }
+    else if step == 2 { banner.append("ENROLL THE ROUTER"); }
+    else if step == 3 { banner.append("META KEY"); }
+    else if step == 4 { banner.append("SET THE ROUTER UP"); }
+    else if step == 5 { banner.append("REBOOT"); }
+    else if step == 6 { banner.append("VERIFY PERSISTENCE"); }
+    else if step == 7 { banner.append("TUNE"); }
+    else if step == 8 { banner.append("MEASURE"); }
+    else { banner.append("SETUP COMPLETE"); }
+    out.append(str("STEP ", if step == 0 { 8 } else { step }, " OF 8   "));
+    out.append(banner);
+    out.append("\n\n");
+    if step == 1 {
+        let gateway = setup_gateway_candidate(network);
+        out.append("Continuum found this host's default-route router:\n\n  ");
+        out.append(if gateway.len > 0 { gateway } else { "none, or several -- press Esc and use p" });
+        out.append("\n\nBinding records the target only. No credential is created\nand nothing is written to the router yet.\n");
+    } else if step == 2 {
+        out.append("Creates this router's admin credential, renames its Wi-Fi and\nrotates the passphrase. This host may drop off Wi-Fi and rejoin.\n\nIf the router is already set up the ceremony refuses safely: it is\nfactory-only, and nothing on the router changes.\n");
+    } else if step == 3 {
+        out.append("Meta needs a key to set the router up. It is hidden while you\ntype, kept in this session unless you choose the Keychain, and\nnever printed or written to settings.\n");
+    } else if step == 4 {
+        out.append("Meta inspects the router and applies its owned baseline: vendor\nservices stripped, fully reversible. No reboot, no reset and no\nfirmware change.\n");
+    } else if step == 5 {
+        out.append("One reboot proves the baseline persists. The network drops for\na few minutes. This approves exactly one reboot, nothing else.\n");
+    } else if step == 6 {
+        out.append("The router is back. Meta proves the owned baseline survived the\nreboot and records the persistence gate.\n");
+    } else if step == 7 {
+        out.append("Meta applies the optimization under the same permission: CAKE\nshaping, no bufferbloat. Reversible -- the owned baseline can be\nrestored at any time.\n");
+    } else if step == 8 {
+        out.append("The last gate is a real loaded run, and it needs a target you\nchoose. Run these two, then come back:\n\n  continuum --measure host:port/path /load-path\n  continuum --device-qualify <receipt> --execute\n");
+    } else {
+        out.append("Every gate is earned. The panels hold the evidence.\n");
+    }
+    out.append(str("\nRouter  ", if bound { d.candidate_id } else { "none bound" }, "\nPhase   ", d.phase,
+        "\nKey     ", if meta_credentials_available(cfg) { "configured" } else { "missing" }, "\n"));
+    if details.len > 0 {
+        out.append("----- last step -----\n");
+        var tail: u8[>..] = [];
+        var i: i64 = if details.len > 600 { details.len - 600 } else { 0 };
+        while i < details.len { tail.push(details[i]); i += 1; }
+        out.append(tail);
+    }
+    if busy { out.append("\nRunning. q cancels; an uncertain step is never replayed.\n"); }
+    else if notice.len > 0 { out.append("\n"); out.append(notice); out.append("\n"); }
+    // The renderer pins the last three lines, so the actions are exactly these.
+    out.append("\n");
+    if step == 1 { out.append("[Enter] Bind this router\n"); }
+    else if step == 2 { out.append("[Enter] Enroll this router\n"); }
+    else if step == 3 { out.append("[Enter] Enter the Meta key\n"); }
+    else if step == 4 { out.append("[Enter] Let Meta set it up\n"); }
+    else if step == 5 { out.append("[Enter] Reboot now (one time)\n"); }
+    else if step == 6 { out.append("[Enter] Verify persistence\n"); }
+    else if step == 7 { out.append("[Enter] Let Meta tune it\n"); }
+    else if step == 8 { out.append("[Enter] Re-check the gates\n"); }
+    else { out.append("[Enter] Re-check\n"); }
+    out.append("[Esc] Leave setup for the panels\n");
+    let names: const u8[:][..8] = ["BIND", "ENROLL", "KEY", "SETUP", "REBOOT", "VERIFY", "TUNE", "MEASURE"];
+    var i2: i64 = 0;
+    while i2 < 8 {
+        if i2 > 0 { out.append("  "); }
+        if step == i2 + 1 { out.append("["); out.append(names[i2]); out.append("]"); }
+        else { out.append(names[i2]); }
+        i2 += 1;
+    }
+    out.append("\n");
+}
 fn setup_section_name(section: i64) -> const u8[:] {
     if section == 1 { return "NETWORK"; }
     if section == 2 { return "DEVICE"; }
@@ -648,10 +752,23 @@ fn run_setup_tui() -> bool {
     let startup_ready = startup_device.setup_approved && startup_device.runtime_verified &&
         startup_device.recovery_verified && startup_device.persistence_verified && startup_device.network_load_verified;
     var screen: i64 = if startup_bound && startup_ready { 0 } else { 2 }; var scroll: i64 = 0;
+    // The wizard is the landing view until the installation is ready: one
+    // Enter per step, each step stating exactly what it will do.
+    var wizard = !(startup_bound && startup_ready);
+    if wizard { notice = []; }
+    var rebooted = false; var tuned = false; var wizard_job: i64 = 0;
+    // Enrollment settles when the ceremony succeeds or when the unit refuses
+    // because it is already configured; either way the step is done.
+    var settled = false;
     var busy = false; var dirty = true; var verified = false;
     var job: u8[>..] = [];
     while true {
         if dirty {
+            var wframe: u8[>..] = [];
+            if wizard {
+                setup_wizard_body(wframe, cfg, network, rebooted, tuned, settled, details, notice, busy);
+                ct_setup_draw(wframe, 0); dirty = false;
+            } else {
             var frame: u8[>..] = [];
             frame.append(str("CONTINUUM - ", setup_section_name(screen), if busy { "  BUSY" } else { "" },
                 "    META ", if meta_credentials_available(cfg) { if verified { "VERIFIED" } else { "KEY STAGED / UNVERIFIED" } } else { "NOT CONFIGURED" }, "\n"));
@@ -695,16 +812,75 @@ fn run_setup_tui() -> bool {
             frame.append("\n");
             setup_footer(frame, screen, busy);
             ct_setup_draw(frame, scroll); dirty = false;
+            }
         }
         let key = ct_tui_key(if busy { 100 } else { -1 });
         if key == 'q' || key == 3 || key < 0 { ct_tui_job_cancel(); break; }
         // A job owns the current snapshot. Do not replace settings/credentials
         // underneath it; q cancels its whole child process group.
         if !busy {
+            // Wizard keys: Enter advances exactly one step; Esc hands over to
+            // the panels. Every step keeps its own confirm frame.
+            if wizard && (key == 13 || key == 10) {
+                notice = [];
+                var wd = DeviceState {};
+                let wbound = device_saved(setup_directory(), wd) && wd.candidate_id.len > 0;
+                let wstep = setup_wizard_step(wd, cfg, wbound, rebooted, tuned, settled);
+                if wstep == 1 {
+                    let gateway = setup_gateway_candidate(network);
+                    if gateway.len == 0 { notice.append("No single default-route router; press Esc, then p."); }
+                    else if !confirm_bind(gateway) { notice.append("Binding cancelled; target unchanged."); }
+                    else if !device_select(setup_directory(), network, gateway, "Continuum", 80, false) {
+                        notice.append("Binding refused or the router is no longer observed.");
+                    }
+                } else if wstep == 2 {
+                    job = []; job.append("device-enroll");
+                    var stem: u8[..27] = "Continuum";
+                    if wd.connection.ssid_stem.len > 0 { stem = wd.connection.ssid_stem; }
+                    if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
+                    else {
+                        var prepared = true;
+                        if wd.phase != "selected" {
+                            prepared = device_select(setup_directory(), network, wd.candidate_id, stem, wd.connection.port, false);
+                        }
+                        if !prepared { notice.append("The router is no longer observed; press Esc and use d/p."); }
+                        else if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; wizard_job = 2;
+                            notice.append("Enrolling. This can take a minute.");
+                        } else { notice.append("Could not start enrollment."); }
+                    }
+                } else if wstep == 3 {
+                    let key_result = ct_tui_key_setup(); verified = false;
+                    notice.append(if key_result == 1 { "Key saved in Keychain; provider not tested." }
+                        else if key_result == 2 { "Key set for this session; provider not tested." }
+                        else { "Key entry cancelled or rejected; previous key unchanged." });
+                } else if wstep == 4 || wstep == 6 || wstep == 7 {
+                    job = []; job.append("device-setup");
+                    if !meta_credentials_available(cfg) { notice.append("The Meta key is missing; press Esc, then m."); }
+                    else if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
+                    else if ct_setup_job_start(job) == 0 {
+                        busy = true; details = []; wizard_job = wstep;
+                        notice.append("Meta is working. q cancels.");
+                    } else { notice.append("Could not start the step."); }
+                } else if wstep == 5 {
+                    job = []; job.append("device-reboot");
+                    if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
+                    else if ct_setup_job_start(job) == 0 {
+                        busy = true; details = []; wizard_job = 5;
+                        notice.append("Approving exactly one reboot.");
+                    } else { notice.append("Could not start the reboot."); }
+                } else {
+                    notice.append(if wstep == 8 { "Run the two commands above, then press Enter again." }
+                        else { "Every gate is earned; press Esc for the panels." });
+                }
+                dirty = true;
+            } else if wizard && key == 27 {
+                wizard = false; notice = []; details = []; dirty = true;
+            }
             // Numbered sections are the primary navigation; legacy letters stay.
-            if key >= '1' && key <= '5' {
-                screen = key - '1'; details = []; notice = []; scroll = 0; dirty = true;
-            } else if key == '?' { screen = 5; details = []; notice = []; scroll = 0; dirty = true; }
+            else if key >= '1' && key <= '5' {
+                screen = key - '1'; details = []; notice = []; scroll = 0; dirty = true; wizard = false;
+            } else if key == '?' { screen = 5; details = []; notice = []; scroll = 0; dirty = true; wizard = false; }
             else if key == 'm' {
                 let result = ct_tui_key_setup(); verified = false;
                 notice = [];
@@ -854,11 +1030,23 @@ fn run_setup_tui() -> bool {
                 if n > 0 && n <= output.len {
                     if job == "discover" && result == 0 { screen = 1; network = []; network.append(output[..n]); observed_wall_ms = time_ns() / 1000000; }
                     else if job.len >= 7 && job[..7] == "device-" {
-                        screen = 6;
-                        details = []; setup_device_view(details);
-                        var selected = DeviceState {};
-                        if job == "device-setup" || job == "device-enroll" || result != 0 {
-                            details.append("\nOPERATION RECEIPT\n"); details.append(output[..n]);
+                        if result == 0 && job == "device-reboot" { rebooted = true; }
+                        if result == 0 && wizard && wizard_job == 7 { tuned = true; }
+                        if wizard_job == 2 && (result == 0 || setup_contains(output[..n], "secured bands")) { settled = true; }
+                        if wizard {
+                            // Stay in the wizard: the receipt is evidence, the
+                            // next step is already computed from device state.
+                            screen = 2;
+                            details = [];
+                            details.append(if result == 0 { "STEP COMPLETE\n\n" } else { "STEP FAILED\n\n" });
+                            details.append(output[..n]);
+                        } else {
+                            screen = 6;
+                            details = []; setup_device_view(details);
+                            var selected = DeviceState {};
+                            if job == "device-setup" || job == "device-enroll" || result != 0 {
+                                details.append("\nOPERATION RECEIPT\n"); details.append(output[..n]);
+                            }
                         }
                     } else {
                         screen = 6;
