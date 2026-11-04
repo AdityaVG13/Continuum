@@ -3,6 +3,15 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.2] - 2026-11-04
+
+- **Meta setup no longer runs out of calls before it acts.** The setup step's
+  budget is 8 model calls (was 4; seen live: four read-only calls, no apply).
+  Picking a model raises a lower saved budget to 8 and prices it that way.
+- Meta is told its call budget, and that the owner policy and a fresh inventory
+  are already in context, so it does not spend calls re-reading them.
+- A run that still exhausts its budget names the operations it spent it on.
+
 ## [0.2.1] - 2026-11-04
 
 Fixes from the first physical run on a factory-reset GT-AX11000.

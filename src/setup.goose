@@ -24,7 +24,7 @@ fn setup_defaults() -> ModelConfig {
     return ModelConfig {
         base_url: "https://api.meta.ai/v1", controller_model: "muse-spark-1.3",
         task_model: "muse-spark-1.3", request_timeout_ms: 60000,
-        max_output_tokens: 16384, max_tool_rounds: 4, reasoning_effort: "xhigh",
+        max_output_tokens: 16384, max_tool_rounds: 8, reasoning_effort: "xhigh",
     };
 }
 
@@ -186,6 +186,11 @@ fn setup_pick_model(cfg: ModelConfig&, listed: const u8[:]) -> bool {
         i += 1;
     }
     if ids.len == 0 { return false; }
+    // The setup step needs room to inspect, apply, read back and summarize; a
+    // 4-call budget ran out live before any apply. Picking a model is where
+    // the owner sees the cost, so the step bound is raised to the cap here
+    // and the prices below are computed with it.
+    if cfg.max_tool_rounds < 8 { cfg.max_tool_rounds = 8; }
     var chosen: i64 = 0;
     var k: i64 = 0;
     while k < ids.len { if ids[k] == cfg.controller_model { chosen = k; } k += 1; }

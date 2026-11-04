@@ -333,11 +333,13 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
     if raw.len > 8192 { return DeviceToolResult { receipt: discovery_rejected("device_receipt_over_bound"), mutation_attempted: attempted }; }
     return DeviceToolResult { receipt: raw, mutation_attempted: attempted, ok: true };
 }
-fn device_agent_input(d: DeviceState, observed: DeviceObservation, message: const u8[:]) -> u8[>..] {
+fn device_agent_input(d: DeviceState, observed: DeviceObservation, message: const u8[:], budget: i64) -> u8[>..] {
     var out: u8[>..] = [];
     out.append("{\"role\":\"device_agent\",\"owner_message\":"); json::format_string(out, message);
     out.append(",\"execution_target\":"); json::format_string(out, if d.candidate_id.len == 0 { "local" } else { d.candidate_id });
     out.append(",\"standing_device_permission\":"); json::format_bool(out, d.setup_approved);
+    out.append(",\"model_call_budget\":"); json::format_int(out, budget);
+    out.append(",\"budget_note\":\"Each tool call and the final summary use one model call; the run stops when the budget is spent.\"");
     out.append(",\"device\":"); out.append(device_view(d, observed));
     var policy = OwnerPolicy {};
     out.append(",\"owner_policy\":");
@@ -360,9 +362,9 @@ fn run_device_agent(model: ModelConfig, directory: const u8[:], message: const u
         d.setup_approved = true;
         if !device_save(d) { ct_device_close(); report.reason = "device_permission_not_durable"; return report; }
     }
-    let input = device_agent_input(d, device_inventory(d), message);
+    let input = device_agent_input(d, device_inventory(d), message, model.max_tool_rounds);
     let tools = device_agent_tools(d);
-    var body: u8[>..] = []; var sent: u8[>..] = [];
+    var body: u8[>..] = []; var sent: u8[>..] = []; var trail: u8[>..] = [];
     if tools.len == 0 || !meta_request_body(model, model.controller_model, instructions, input, tools, body) || !opening_input(input, sent) {
         ct_device_close(); report.reason = "agent_request_over_bound_or_resources_missing"; return report;
     }
@@ -385,6 +387,13 @@ fn run_device_agent(model: ModelConfig, directory: const u8[:], message: const u
             report.ok = true; break;
         }
         let result = device_dispatch(directory, d, response);
+        // Which operations the budget went to, for a refusal the owner can act on.
+        var adoc: json::Node[>..] = []; var atext: u8[>..] = [];
+        let aroot, aerr = json::parse(response.arguments_json, adoc, atext);
+        let aop, has_op = json::as_string(json::member(aroot, "operation"));
+        if trail.len > 0 { trail.append(", "); }
+        if response.tool == ToolName.InspectSystem { trail.append("inspect_system"); }
+        else if has_op && aop.len <= 32 { trail.append(aop); } else { trail.append("?"); }
         report.mutation_attempted = report.mutation_attempted || result.mutation_attempted;
         var next: u8[>..] = []; var replayed: u8[>..] = [];
         if !meta_continuation_body(model, model.controller_model, instructions, sent, response.raw_output_json,
@@ -395,7 +404,10 @@ fn run_device_agent(model: ModelConfig, directory: const u8[:], message: const u
         body = []; body.append(next); sent = []; sent.append(replayed);
     }
     ct_device_close();
-    if !report.ok && report.reason.len == 0 { report.reason = "model_round_budget_exhausted"; }
+    if !report.ok && report.reason.len == 0 {
+        var why: u8[>..] = []; why.append("model_round_budget_exhausted after: "); why.append(trail);
+        report.reason = if why.len <= 256 { why[..why.len] } else { why[..256] };
+    }
     return report;
 }
 fn device_agent_record(report: DeviceAgentReport) -> u8[>..] {
