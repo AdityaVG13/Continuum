@@ -698,6 +698,54 @@ def main():
             wrong = subprocess.run([unified, "--program-run", program_id], env=no_model, capture_output=True, text=True, timeout=10)
             assert wrong.returncode != 0 and "device_identity_changed" in wrong.stdout
             request("/applyapp.cgi", {"extendno": "1"})
+            # The resident loop is proven by revoking it while an effect is
+            # live: the owner drops reach, the loop must restore what it owns,
+            # and only that artifact makes takeover selectable.
+            drill_state = directory / "config/continuum/device/takeover-drill.state"
+            drill_path = directory / "config/continuum/device/takeover-drill.json"
+            if drill_state.exists():
+                drill_state.unlink()
+            if drill_path.exists():
+                drill_path.unlink()
+            reconciled = subprocess.run([unified, "--device-step", "restore", "--execute"], env=no_model,
+                capture_output=True, text=True, timeout=60)
+            assert reconciled.returncode == 0, "the drill starts from a reconciled baseline: " + reconciled.stdout
+            before_drill = read_device()
+            drill = subprocess.Popen([unified, "--takeover-drill"], env=no_model,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            deadline = time.time() + 180
+            while drill.poll() is None and time.time() < deadline:
+                if drill_state.exists() and "applied=yes" in drill_state.read_text():
+                    break
+                time.sleep(0.2)
+            if not drill_state.exists() or "applied=yes" not in drill_state.read_text():
+                output, _ = drill.communicate(timeout=60)
+                raise AssertionError("the loop must apply before revocation can be tested: "
+                    + (drill_state.read_text() if drill_state.exists() else "no progress record") + output)
+            lowered = subprocess.run([unified, "--device-mode", "observer"], env=no_model,
+                capture_output=True, text=True, timeout=10)
+            if lowered.returncode != 0:
+                # The loop reads the binding between cycles; the owner's write
+                # may land in one of those short windows. Retry like an owner.
+                deadline = time.time() + 30
+                while lowered.returncode != 0 and time.time() < deadline:
+                    time.sleep(0.2)
+                    lowered = subprocess.run([unified, "--device-mode", "observer"], env=no_model,
+                        capture_output=True, text=True, timeout=10)
+            assert lowered.returncode == 0, lowered.stdout
+            output, _ = drill.communicate(timeout=300)
+            assert drill.returncode == 0, output
+            artifact = json.loads(drill_path.read_text())
+            assert artifact["revoked"] and artifact["restored"], artifact
+            assert artifact["calls_after_revoke"] == 0 and artifact["cycles"] >= 1 and artifact["effects"] >= 1, artifact
+            assert read_device() == before_drill, "the revoked loop must leave the device at its owned baseline"
+            assert json.loads(state_path.read_text())["ownership"] == "observer"
+            reopened = subprocess.run([unified, "--device-mode", "takeover"], env=no_model,
+                capture_output=True, text=True, timeout=10)
+            assert reopened.returncode == 0 and "DEVICE_MODE takeover" in reopened.stdout, \
+                "a passed drill for this device is what makes takeover selectable: " + reopened.stdout
+            assert subprocess.run([unified, "--device-mode", "operator"], env=no_model,
+                capture_output=True, text=True, timeout=10).returncode == 0
             revoked = subprocess.run([unified, "--device-step", "revoke", "--execute"], env=no_model, capture_output=True, text=True, timeout=10)
             assert revoked.returncode == 0 and not json.loads(state_path.read_text())["setup_approved"]
             denied_run = subprocess.run([unified, "--program-run", program_id], env=no_model, capture_output=True, text=True, timeout=10)

@@ -14,6 +14,7 @@ import .continuity;
 import .service;
 import .device;
 import .device_agent;
+import .takeover;
 import os;
 
 // The status entrypoint reports each module's implementation state. Calling
@@ -291,6 +292,12 @@ fn main() {
             else if argv[1] == "--program-read" { "read_program" } else if argv[1] == "--program-reconcile" { "reconcile_program" }
             else { "enable_program" }, argv[2]));
     }
+    if argv.len == 2 && argv[1] == "--takeover-drill" {
+        exit(continuum::takeover_drill(continuum::setup_directory()));
+    }
+    if argv.len == 2 && argv[1] == "--takeover-run" {
+        exit(continuum::takeover_cli(continuum::setup_directory()));
+    }
     if argv.len == 3 && argv[1] == "--device-mode" {
         let refused = continuum::device_set_mode(continuum::setup_directory(), argv[2]);
         if refused.len > 0 { print("DEVICE_REFUSED ", refused); exit(1); }
@@ -379,7 +386,8 @@ fn main() {
     print("       continuum --discover | --discover-model | --test-meta");
     print("       continuum --device-select <candidate-id> <ssid-stem> [port [--existing-credentials]]");
     print("       continuum --device-status | --device-step inspect | authorize | setup [--execute] | restore --execute | reboot --execute");
-    print("       continuum --device-mode observer | advisor | operator (takeover requires the resident loop and revocation drill)");
+    print("       continuum --device-mode observer | advisor | operator | takeover (takeover needs a passed drill)");
+    print("       continuum --takeover-drill (runs the loop, proves revocation, writes the artifact)");
     print("       continuum --talk <message> (selected-device conversation; never grants reboot permission)");
     print("       continuum --owner-policy | --owner-policy-set <json> (owner only; never a Meta tool)");
     print("       continuum --program-install <json> | --program-prune");

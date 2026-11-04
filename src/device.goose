@@ -4,6 +4,7 @@
 import .commission;
 import .owner;
 import .discovery;
+import .takeover;
 import json;
 import os;
 namespace continuum;
@@ -154,25 +155,27 @@ fn device_saved(directory: const u8[:], d: DeviceState&) -> bool {
     let ok = device_load(d); ct_device_close(); return ok;
 }
 
-// Takeover is the product's headline mode, so it stays unselectable until the
-// resident loop and the revocation drill exist. Naming a mode is not
-// delivering it, and the state file must not be able to claim reach we cannot
-// yet back with a tested restore.
-fn ownership_selectable(mode: const u8[:]) -> bool {
-    return mode == "observer" || mode == "advisor" || mode == "operator";
+// Takeover is the product's headline mode, so it stays unselectable until this
+// exact device has passed the revocation drill. The artifact is re-read on
+// every attempt rather than cached in the state file, so a stale or hand-edited
+// record cannot make the mode claim reach the product never proved.
+fn ownership_selectable(directory: const u8[:], d: DeviceState, mode: const u8[:]) -> bool {
+    if mode == "observer" || mode == "advisor" || mode == "operator" { return true; }
+    return mode == "takeover" && takeover_drill_ok(directory, d);
 }
 
 fn device_set_mode(directory: const u8[:], mode: const u8[:]) -> const u8[:] {
     if mode != "observer" && mode != "advisor" && mode != "operator" && mode != "takeover" {
         return "unknown_ownership_mode";
     }
-    if !ownership_selectable(mode) {
-        return "takeover_unavailable_resident_loop_and_revocation_drill_required";
-    }
     if !device_open(directory, 1) { return "device_state_unavailable"; }
     var d = DeviceState {};
     if !device_load(d) { ct_device_close(); return "device_state_invalid"; }
     if d.candidate_id.len == 0 { ct_device_close(); return "device_not_selected"; }
+    if !ownership_selectable(directory, d, mode) {
+        ct_device_close();
+        return "takeover_unavailable_resident_loop_and_revocation_drill_required";
+    }
     d.ownership = mode;
     let saved = device_save(d);
     ct_device_close();
