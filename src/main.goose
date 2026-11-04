@@ -18,6 +18,8 @@ import .takeover;
 import .measure;
 import os;
 
+extern fn ct_resource_root_enter() -> i32;
+
 // One place for the released version. Bump here and in CHANGELOG.md together.
 fn version_line() -> const u8[:] {
     return "continuum 0.1.0";
@@ -234,6 +236,8 @@ fn show_router() {
 
 fn main() {
     let argv = args();
+    // Prompts/schemas are relative paths: run from any directory.
+    ct_resource_root_enter();
     if argv.len == 1 {
         if !continuum::run_setup_tui() { show_status(); }
         return;
@@ -349,7 +353,9 @@ fn main() {
             print("META_TEST_FAILED MODEL_API_KEY unavailable; no provider call");
             exit(1);
         }
-        cfg.max_output_tokens = 256;
+        // Reasoning tokens count against the cap, so the connection test asks
+        // for the shallowest effort; the saved effort applies to real work.
+        cfg.max_output_tokens = 1024; cfg.reasoning_effort = "minimal";
         var body: u8[>..] = [];
         if !continuum::meta_request_body(cfg, cfg.controller_model,
                 "Connection test only. Reply with: Continuum Meta connection verified.",
@@ -360,6 +366,20 @@ fn main() {
             exit(1);
         }
         print("META_CONNECTION_VERIFIED model=", result.provider_model_id, " calls=1");
+        return;
+    }
+    if argv.len == 2 && argv[1] == "--meta-models" {
+        let cfg = loop_config("MODEL_API_KEY");
+        if !continuum::meta_credentials_available(cfg) {
+            print("META_MODELS_FAILED MODEL_API_KEY unavailable; no provider call"); exit(1);
+        }
+        var ids: u8[>..] = []; var status: i64 = 0;
+        if !continuum::meta_list_models(cfg, ids, status) {
+            print("META_MODELS_FAILED status=", status); exit(1);
+        }
+        var line: u8[>..] = [];
+        for b in ids { if b == '\n' { line.append(" "); } else { line.push(b); } }
+        print("META_MODELS ", line);
         return;
     }
     if argv.len == 2 && argv[1] == "--sim" {
@@ -410,7 +430,7 @@ fn main() {
     }
     print("Usage: continuum [--tui] | --status | --version | --sim | --daemon | --loop");
     print("       continuum --serve [sample-count] (live monitoring; opt-in Meta uses owner-scoped device capabilities)");
-    print("       continuum --discover | --discover-model | --test-meta");
+    print("       continuum --discover | --discover-model | --test-meta | --meta-models");
     print("       continuum --device-select <candidate-id> <ssid-stem> [port [--existing-credentials]]");
     print("       continuum --device-status | --device-step inspect | authorize | enroll --execute | setup [--execute] | verify --execute | restore --execute | reboot --execute");
     print("       continuum --device-mode observer | advisor | operator | takeover (takeover needs a passed drill)");

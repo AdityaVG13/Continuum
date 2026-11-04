@@ -1,6 +1,7 @@
 // Continuum Meta HTTPS transport (item M01/C03).
 //
-// One bounded POST to the provider's /responses endpoint via the system
+// One bounded POST to the provider's /responses endpoint (or one GET of the
+// key's /models catalog, which carries no body) via the system
 // curl binary: no new TLS dependency, no persistent connections, no
 // threads. Goose owns request identity, budgets and response meaning;
 // this file owns bytes on the wire.
@@ -32,7 +33,9 @@
 
 namespace {
 
-const long kMaxBytes = 32768;
+// Responses at high reasoning effort carry encrypted reasoning items, so the
+// response ceiling is 256 KiB; larger bodies still fail closed, unread.
+const long kMaxBytes = 262144;
 const int kShellTimeoutPadSec = 5;
 // Goose calls this synchronous boundary on one thread. Handles and pending
 // envelopes belong to this process; setup and the resident service cannot
@@ -180,7 +183,10 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     std::string req((const char *)request_json.data, (size_t)request_json.len);
     std::string path, body;
     if (!json_str(req, "path", path, 64)) return CT_INVALID_ARGUMENT;
-    if (path != "/responses") return CT_INVALID_ARGUMENT;
+    const bool listing = path == "/models";
+    if (path != "/responses" && !listing) return CT_INVALID_ARGUMENT;
+    std::string body_json;
+    if (!listing) {
     // The body is the provider JSON; locate its raw span by brace balance
     // from the first '{' after "body": so no re-serialization can smuggle
     // in a second member.
@@ -212,8 +218,9 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
         }
     }
     if (be == std::string::npos) return CT_INVALID_ARGUMENT;
-    std::string body_json = req.substr(bs, be - bs + 1);
+    body_json = req.substr(bs, be - bs + 1);
     if ((long)body_json.size() > kMaxBytes) return CT_INVALID_ARGUMENT;
+    }
 
     const auto session = sessions.find(handle);
     if (session == sessions.end()) return CT_INVALID_ARGUMENT;
@@ -280,10 +287,10 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     std::string url = base + path;
     std::string cmd = "curl -sS -A 'OpenAI File Downloader, XaiImageApiFetch/1.0' --max-time " + std::to_string(secs) +
                       " --max-filesize " + std::to_string(max_bytes) +
-                      " -o " + sh_quote(rsp_path) + " -X POST " +
-                      sh_quote(url) + " -H 'Content-Type: application/json'" +
+                      " -o " + sh_quote(rsp_path) + (listing ? " -X GET " : " -X POST ") +
+                      sh_quote(url) + (listing ? "" : " -H 'Content-Type: application/json'") +
                       " -H @" + sh_quote(hdr_path) +
-                      " --data @" + sh_quote(body_path) +
+                      (listing ? std::string() : " --data @" + sh_quote(body_path)) +
                       " -w '%{http_code}'";
     FILE *pp = popen(cmd.c_str(), "r");
     if (!pp) {

@@ -75,6 +75,9 @@ struct ModelConfig {
     request_timeout_ms: i64 = 0,
     max_output_tokens: i64 = 0,
     max_tool_rounds: i64 = 0,
+    // Responses API reasoning.effort. Reasoning tokens are billed as output
+    // and count against max_output_tokens (dev.meta.ai/docs/reasoning).
+    reasoning_effort: u8[..8] = "low",
 }
 
 struct ModelRequest {
@@ -98,7 +101,8 @@ struct ModelResult {
     text: u8[..8192] = "",
     // Byte-exact provider output items, replayed intact on continuation
     // (stateless history). Bounded: oversize responses fail closed upstream.
-    raw_output_json: u8[..8192] = "",
+    // Sized for encrypted reasoning items at high effort, not just tool calls.
+    raw_output_json: u8[..65536] = "",
 }
 
 struct ActionRequest {

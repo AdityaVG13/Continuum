@@ -203,6 +203,29 @@ std::string executable() {
 } // namespace
 
 extern "C" {
+// Prompts and tool schemas are read by relative path (docs/prompts, schemas).
+// `continuum` may be started from any directory, so when the working
+// directory does not hold them, enter the first resource root that does:
+// $CONTINUUM_RESOURCES, the checkout above .build/, or <prefix>/share/continuum
+// beside an installed bin/continuum. Returns 0 unchanged, 1 entered, -1 none.
+int32_t ct_resource_root_enter() {
+    auto holds = [](const std::string &root) {
+        return access((root + "/docs/prompts/device.md").c_str(), R_OK) == 0 &&
+               access((root + "/schemas/device-tools.json").c_str(), R_OK) == 0;
+    };
+    if (holds(".")) return 0;
+    std::vector<std::string> roots;
+    if (const char *forced = std::getenv("CONTINUUM_RESOURCES"); forced && forced[0] == '/') roots.push_back(forced);
+    char real[4096] = {};
+    if (realpath(executable().c_str(), real)) {
+        std::string dir(real);
+        dir = dir.substr(0, dir.rfind('/'));
+        roots.push_back(dir + "/..");
+        roots.push_back(dir + "/../share/continuum");
+    }
+    for (const auto &root : roots) if (holds(root) && chdir(root.c_str()) == 0) return 1;
+    return -1;
+}
 int32_t ct_tui_open() {
     const char *term = std::getenv("TERM");
     if (active || !isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) ||
@@ -386,7 +409,7 @@ int32_t ct_tui_job_start(ct_bytes mode) {
         load = task.substr(split + 1);
     } else if (task.find('\n') != std::string::npos) return CT_REJECTED;
     const char *arg = talk ? "--talk" : device ? "--device-step" : task == "discover" ? "--discover" : task == "agent" ? "--discover-model" :
-                      task == "test-key" ? "--test-meta" : task == "lab" ? "--loop" : qos ? "--device-qos" :
+                      task == "test-key" ? "--test-meta" : task == "models" ? "--meta-models" : task == "lab" ? "--loop" : qos ? "--device-qos" :
                       qos_restore ? "--device-qos-restore" : qualify ? "--device-qualify" : measure ? "--measure" : nullptr;
     if (!arg) return CT_REJECTED;
     auto path = executable();

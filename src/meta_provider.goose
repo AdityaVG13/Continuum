@@ -23,8 +23,8 @@ fn meta_credentials_available(config: ModelConfig) -> bool {
 
 // Transport ceiling: the largest provider body the adapter will copy.
 // Larger responses fail closed, never truncate.
-const META_TRANSPORT_BYTES: i64 = 32768;
-const META_ENVELOPE_BYTES: i64 = 33792;
+const META_TRANSPORT_BYTES: i64 = 262144;
+const META_ENVELOPE_BYTES: i64 = 263168;
 
 fn meta_failed(reason: const u8[:]) -> ModelResult {
     return ModelResult {
@@ -83,7 +83,9 @@ fn meta_exchange(config: ModelConfig, request_id: const u8[:],
         ct_meta_close(handle);
         return meta_failed("meta submit failed");
     }
-    var env: u8[..33792] = [0; 33792];
+    var env: u8[>..] = [];
+    var fill: i64 = 0;
+    while fill < META_ENVELOPE_BYTES { env.push(0); fill += 1; }
     var n: i64 = 0;
     if ct_meta_poll(handle, env, n) != 0 {
         ct_meta_cancel(handle, req_no);
@@ -215,4 +217,44 @@ fn submit_tool_result(config: ModelConfig, request_id: const u8[:],
         return meta_failed("meta continuation body invalid");
     }
     return meta_exchange(config, request_id, body);
+}
+
+// One GET of the key's model catalog (dev.meta.ai/docs/models: "List models
+// via the API"). Returns the hosted model ids enabled for this key, newest
+// first as the provider orders them, one per line. No tokens are billed by a
+// catalog read; status carries the HTTP outcome (0 = transport failure).
+fn meta_list_models(config: ModelConfig, ids: u8[>..]&, status: i64&) -> bool {
+    status = 0;
+    var cfg_text: u8[>..] = [];
+    if !meta_transport_config(config, cfg_text) { return false; }
+    var handle: u64 = 0;
+    if ct_meta_open(cfg_text, handle) != 0 || handle == 0 { return false; }
+    var req_no: u64 = 0;
+    if ct_meta_submit(handle, "{\"path\":\"/models\"}", req_no) != 0 || req_no == 0 {
+        ct_meta_close(handle); return false;
+    }
+    var env: u8[>..] = [];
+    var fill: i64 = 0;
+    while fill < META_ENVELOPE_BYTES { env.push(0); fill += 1; }
+    var n: i64 = 0;
+    if ct_meta_poll(handle, env, n) != 0 || n <= 0 || n > env.len {
+        ct_meta_cancel(handle, req_no); ct_meta_close(handle); return false;
+    }
+    ct_meta_close(handle);
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(env[..n], doc, decoded);
+    if !root { return false; }
+    let code, has_code = json::as_i64(json::member(root, "status"));
+    if !has_code { return false; }
+    status = code;
+    if code != 200 { return false; }
+    let data = json::member(json::member(root, "body"), "data");
+    if !data { return false; }
+    var c = data.first; var count: i64 = 0;
+    while c && count < 32 {
+        let id, has_id = json::as_string(json::member(c, "id"));
+        if has_id && valid_id(id, 128) { ids.append(id); ids.append("\n"); count += 1; }
+        c .= c.next;
+    }
+    return count > 0;
 }

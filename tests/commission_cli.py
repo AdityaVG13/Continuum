@@ -914,7 +914,10 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
     (device / "qdisc-eth0").write_text("qdisc pfifo_fast 0: root refcnt 2 bands 3\n")
     env = dict(base_env, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color",
                NO_COLOR="1", CONTINUUM_AGENT_FIXTURE="commission", ROUTER_OUTAGE_FILE=str(outage_file),
-               CT_COMMISSION_DEVICE_OUTAGE_MS="5000", CT_COMMISSION_SSH_DROP_REBOOT="1")
+               CT_COMMISSION_DEVICE_OUTAGE_MS="5000", CT_COMMISSION_SSH_DROP_REBOOT="1",
+               # Every provider request after the picker must carry the model and
+               # effort the owner chose on screen, not the stale settings file.
+               CONTINUUM_FIXTURE_MODEL="muse-spark-1.3", CONTINUUM_FIXTURE_EFFORT="low")
     env.pop("MODEL_API_KEY", None)
     chosen = subprocess.run([unified, "--device-select", "lo0:127.0.0.1", "ExistingNetwork", str(port),
                              "--existing-credentials"], env=env, capture_output=True, text=True, timeout=10)
@@ -987,18 +990,34 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
         if sys.platform == "darwin":
             expect("Save in Keychain?")
         press(b"n")
-        expect("One connection-test call")
-        press(b"\r")
+        # Listing the key's models is free, so a refused key is caught there,
+        # before any billed call.
         expect("[Enter] Test again    [k] New key", 30)
         refused = output[output.rfind(b"STEP 3 OF 8"):]
         assert b"WHY IT STOPPED" in refused and b"Key  unverified" in refused, "a refused key stays on the key step"
+        assert b"refused this key while listing" in refused, refused[-1500:]
         press(b"k")
         expect("MODEL_API_KEY")
         press(b"synthetic-good-key\r")
         if sys.platform == "darwin":
             expect("Save in Keychain?")
         press(b"n")
+        expect("CHOOSE THE META MODEL", 30)
+        expect("[Esc] Cancel; nothing is saved", 5)
+        picker = output[output.rfind(b"CHOOSE THE META MODEL"):]
+        offered = picker[:picker.find(b"Not offered")]
+        assert b"> 1  muse-spark-1.3" in offered, "Spark 1.3 is preselected when the saved model is not offered"
+        assert b"$1.250" in offered and b"$4.250" in offered and b"$20.000" in offered, "rate card shown per model"
+        assert b"muse-image-1.0" not in offered and b"muse-image-1.0" in picker, "non-agent models are not offered"
+        press(b"\r")
+        expect("REASONING EFFORT")
+        press(b"2")
+        expect("> 2  low")
+        press(b"\r")
         expect("Confirm Meta job")
+        saved = json.loads((config / "settings.json").read_text())
+        assert (saved["controller_model"], saved["reasoning_effort"], saved["max_output_tokens"]) == \
+            ("muse-spark-1.3", "low", 4096), saved
         press(b"\r")
         expect("STEP 4 OF 8", 30)
         press(b"\r")

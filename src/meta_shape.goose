@@ -26,6 +26,13 @@ struct MetaEnvelope {
     stream: bool = true,
 }
 
+// Levels the Model API accepts for Muse Wonder/Spark. "none" is a 400 for
+// both lines, so it is not offered (dev.meta.ai/docs/reasoning).
+fn valid_effort(effort: const u8[:]) -> bool {
+    return effort == "minimal" || effort == "low" || effort == "medium" ||
+        effort == "high" || effort == "xhigh" || effort == "max";
+}
+
 // The envelope the controller would submit: fixed safe flags (serial tool
 // calls, no server-side store, no stream), budgets from config, ids bound
 // to this run and context. False by default only as a struct literal; the
@@ -59,6 +66,9 @@ fn build_meta_request(config: ModelConfig, run_id: const u8[:],
     }
     if config.max_tool_rounds <= 0 || config.max_tool_rounds > MAX_TOOL_ROUNDS {
         return MetaEnvelope { ok: false, reason: "tool rounds outside 1..8" };
+    }
+    if !valid_effort(config.reasoning_effort) {
+        return MetaEnvelope { ok: false, reason: "reasoning effort not minimal|low|medium|high|xhigh|max" };
     }
     return MetaEnvelope {
         ok: true,
@@ -108,9 +118,11 @@ fn meta_error_class(status: i64, body_preview: const u8[:]) -> MetaErrorClass {
 
 // Item 5: the Meta Responses request/response meaning (no transport here).
 // The native adapter moves bytes; this module decides what the bytes mean.
-const MAX_META_BODY_BYTES: i64 = 32768;
+// Body and raw-output ceilings leave room for replayed encrypted reasoning
+// items at high effort; anything larger still fails closed.
+const MAX_META_BODY_BYTES: i64 = 131072;
 const MAX_META_TEXT_BYTES: i64 = 8192;
-const MAX_META_RAW_BYTES: i64 = 8192;
+const MAX_META_RAW_BYTES: i64 = 65536;
 
 // Build the initial Responses body: fixed safe flags, role model, real
 // prompt and validated context, caller-supplied tool array (validated as
@@ -131,6 +143,9 @@ fn meta_request_body(config: ModelConfig, role_model: const u8[:],
             || config.max_output_tokens > MAX_OUTPUT_TOKENS {
         return false;
     }
+    if !valid_effort(config.reasoning_effort) {
+        return false;
+    }
     var r = json::reader(tools_json);
     if json::peek(r) != '[' {
         return false;
@@ -149,7 +164,9 @@ fn meta_request_body(config: ModelConfig, role_model: const u8[:],
     out.append(",\"tool_choice\":\"auto\",\"parallel_tool_calls\":false,");
     out.append("\"store\":false,");
     out.append("\"include\":[\"reasoning.encrypted_content\"],\"stream\":false,");
-    out.append("\"reasoning\":{\"effort\":\"low\"},\"max_output_tokens\":");
+    out.append("\"reasoning\":{\"effort\":");
+    json::format_string(out, config.reasoning_effort);
+    out.append("},\"max_output_tokens\":");
     json::format_int(out, config.max_output_tokens);
     out.append(",\"tools\":");
     out.append(tools_json);
@@ -474,6 +491,9 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
             || config.max_output_tokens > MAX_OUTPUT_TOKENS {
         return false;
     }
+    if !valid_effort(config.reasoning_effort) {
+        return false;
+    }
     var r4 = json::reader(tools_json);
     if json::peek(r4) != '[' {
         return false;
@@ -495,7 +515,9 @@ fn meta_continuation_body(config: ModelConfig, role_model: const u8[:],
     out.append(",\"tool_choice\":\"auto\",\"parallel_tool_calls\":false,");
     out.append("\"store\":false,");
     out.append("\"include\":[\"reasoning.encrypted_content\"],\"stream\":false,");
-    out.append("\"reasoning\":{\"effort\":\"low\"},\"max_output_tokens\":");
+    out.append("\"reasoning\":{\"effort\":");
+    json::format_string(out, config.reasoning_effort);
+    out.append("},\"max_output_tokens\":");
     json::format_int(out, config.max_output_tokens);
     out.append(",\"tools\":");
     out.append(tools_json);

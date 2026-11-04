@@ -35,6 +35,7 @@ int32_t ct_meta_poll(ct_handle handle, ct_output result_json, int64_t *out_lengt
 int32_t ct_meta_cancel(ct_handle handle, uint64_t request_id);
 int32_t ct_meta_close(ct_handle handle);
 /* Boolean credential-source availability; never returns the secret. */
+int32_t ct_resource_root_enter(void);
 int32_t ct_meta_key_available(ct_bytes name);
 
 /* Reserved request/response boundaries for a separate owned-profile

@@ -26,9 +26,27 @@ int32_t ct_meta_open(ct_bytes, ct_handle *out) { *out = 1; return CT_OK; }
 int32_t ct_meta_submit(ct_handle, ct_bytes request, uint64_t *out) {
     std::string body(reinterpret_cast<const char *>(request.data), static_cast<size_t>(request.len));
     if (body.find("synthetic-private") != std::string::npos) return fail("key leaked into provider request");
+    if (body.find("\"path\":\"/models\"") != std::string::npos) {
+        // The key's catalog, shaped like GET /v1/models. Mixed on purpose:
+        // image and segmentation ids must never be offered as the agent.
+        const char *key = std::getenv("MODEL_API_KEY");
+        if (key && std::strstr(key, "rejected"))
+            pending = "{\"status\":401,\"body\":null,\"error\":\"\"}";
+        else
+            pending = "{\"status\":200,\"body\":{\"object\":\"list\",\"data\":["
+                "{\"id\":\"muse-image-1.0\",\"object\":\"model\"},{\"id\":\"muse-spark-1.3\",\"object\":\"model\"},"
+                "{\"id\":\"muse-wonder-1.0\",\"object\":\"model\"},{\"id\":\"muse-spark-1.3-contributor\",\"object\":\"model\"},"
+                "{\"id\":\"sam-3.1\",\"object\":\"model\"}]},\"error\":\"\"}";
+        *out = 1;
+        return CT_OK;
+    }
     const char *expected = std::getenv("CONTINUUM_FIXTURE_MODEL");
     if (expected && body.find("\"model\":" + quote(expected)) == std::string::npos)
         return fail("worker model differs from the TUI settings");
+    const char *effort = std::getenv("CONTINUUM_FIXTURE_EFFORT");
+    if (effort && body.find("Connection test only.") == std::string::npos &&
+        body.find("\"effort\":" + quote(effort)) == std::string::npos)
+        return fail("request effort differs from the effort chosen in the TUI");
     std::string output;
     if (body.find("Connection test only.") != std::string::npos) {
         // The wizard's key check. A key the provider refuses answers 401, the

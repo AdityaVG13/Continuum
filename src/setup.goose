@@ -22,9 +22,9 @@ extern fn ct_setup_job_poll(out: u8[:], length: i64&) -> i32;
 
 fn setup_defaults() -> ModelConfig {
     return ModelConfig {
-        base_url: "https://api.meta.ai/v1", controller_model: "muse-wonder-1.0",
-        task_model: "muse-wonder-1.0", request_timeout_ms: 30000,
-        max_output_tokens: 2048, max_tool_rounds: 4,
+        base_url: "https://api.meta.ai/v1", controller_model: "muse-spark-1.3",
+        task_model: "muse-spark-1.3", request_timeout_ms: 60000,
+        max_output_tokens: 16384, max_tool_rounds: 4, reasoning_effort: "xhigh",
     };
 }
 
@@ -59,7 +59,7 @@ fn load_setup_settings(cfg: ModelConfig&) -> bool {
     var doc: json::Node[>..] = [];
     var decoded: u8[>..] = [];
     let root, err = json::parse(text, doc, decoded);
-    let known: const u8[:][..5] = ["controller_model", "task_model", "max_output_tokens", "max_tool_rounds", "request_timeout_ms"];
+    let known: const u8[:][..6] = ["controller_model", "task_model", "max_output_tokens", "max_tool_rounds", "request_timeout_ms", "reasoning_effort"];
     if !root || !no_unknown(root, known) { return false; }
     let controller, c = json::as_string(json::member(root, "controller_model"));
     let task, t = json::as_string(json::member(root, "task_model"));
@@ -70,6 +70,9 @@ fn load_setup_settings(cfg: ModelConfig&) -> bool {
     var candidate = setup_defaults();
     candidate.controller_model = controller; candidate.task_model = task;
     candidate.max_output_tokens = tokens; candidate.max_tool_rounds = rounds; candidate.request_timeout_ms = timeout;
+    // Files written before the effort was configurable ran at "low".
+    let effort, ef = json::as_string(json::member(root, "reasoning_effort"));
+    candidate.reasoning_effort = if !ef { "low" } else if valid_effort(effort) { effort } else { "" };
     if !settings_valid(candidate) { return false; }
     cfg = candidate;
     return true;
@@ -93,10 +96,158 @@ fn save_setup_settings(cfg: ModelConfig) -> bool {
     text.append(",\"max_output_tokens\":"); json::format_int(text, cfg.max_output_tokens);
     text.append(",\"max_tool_rounds\":"); json::format_int(text, cfg.max_tool_rounds);
     text.append(",\"request_timeout_ms\":"); json::format_int(text, cfg.request_timeout_ms);
+    text.append(",\"reasoning_effort\":"); json::format_string(text, cfg.reasoning_effort);
     text.append("}\n");
     return write_file_atomic(str(directory, "/settings.json"), text);
 }
 
+// Meta Model API rate card, copied from the official pages on 2026-11-04:
+//   https://dev.meta.ai/docs/pricing-rate-limits  (USD per 1M tokens)
+//   https://dev.meta.ai/docs/models               (versions, modes, effort)
+// Prices are in thousandths of a dollar per 1M tokens (1250 = $1.25). The
+// key's own /models catalog decides what is offered; this table only adds
+// price and description. An id missing here is shown without a price.
+struct MetaModelCard {
+    known: bool = false,
+    input_milli: i64 = 0,
+    cached_milli: i64 = 0,
+    output_milli: i64 = 0,
+    trains: bool = false,
+    max_effort: bool = false,
+    note: u8[..96] = "",
+}
+fn meta_model_card(id: const u8[:]) -> MetaModelCard {
+    if id == "muse-wonder-1.0" {
+        return MetaModelCard { known: true, input_milli: 4000, cached_milli: 200, output_milli: 20000, max_effort: true,
+            note: "Most capable; long multi-step agent work. Slowest, priciest." };
+    }
+    if id == "muse-spark-1.3" {
+        return MetaModelCard { known: true, input_milli: 1250, cached_milli: 150, output_milli: 4250, max_effort: true,
+            note: "Latest Spark; tuned for tool loops. Recommended for this job." };
+    }
+    if id == "muse-spark-1.2" || id == "muse-spark-1.1" {
+        return MetaModelCard { known: true, input_milli: 1250, cached_milli: 150, output_milli: 4250,
+            note: if id == "muse-spark-1.2" { "Previous Spark version." } else { "Original Spark version." } };
+    }
+    if id == "muse-spark-1.3-contributor" || id == "muse-spark-1.2-contributor" {
+        return MetaModelCard { known: true, input_milli: 100, cached_milli: 2, output_milli: 200, trains: true,
+            note: "Contributor mode: Meta may train on your prompts and replies." };
+    }
+    return MetaModelCard {};
+}
+// Only the reasoning text lines take tool calls; image, voice and SAM ids
+// from the catalog are never offered as the router agent.
+fn meta_agent_model(id: const u8[:]) -> bool {
+    return (id.len >= 10 && id[..10] == "muse-spark") || (id.len >= 11 && id[..11] == "muse-wonder");
+}
+fn setup_usd(micro: i64) -> u8[>..] {
+    var out: u8[>..] = [];
+    let cents_milli = (micro % 1000000) / 1000;
+    out.append(str("$", micro / 1000000, "."));
+    if cents_milli < 100 { out.append("0"); }
+    if cents_milli < 10 { out.append("0"); }
+    out.append(str(cents_milli));
+    return out;
+}
+fn setup_rate(milli: i64) -> u8[>..] {
+    var out: u8[>..] = [];
+    out.append(str("$", milli / 1000, "."));
+    let frac = milli % 1000;
+    if frac < 100 { out.append("0"); }
+    if frac < 10 { out.append("0"); }
+    out.append(str(frac));
+    return out;
+}
+// Reasoning tokens are billed as output and count against the cap, so a
+// deeper effort gets a larger cap (dev.meta.ai/docs/reasoning).
+fn effort_output_cap(effort: const u8[:]) -> i64 {
+    if effort == "minimal" { return 2048; }
+    if effort == "low" { return 4096; }
+    if effort == "medium" { return 8192; }
+    if effort == "max" { return 32768; }
+    return 16384;
+}
+// Upper bound for one Meta step, from the caps this checkout enforces: each
+// call sends at most MAX_META_BODY_BYTES (about 32k tokens at ~4 bytes per
+// token) and returns at most the output cap. A bound, not a measurement.
+fn setup_run_ceiling(card: MetaModelCard, rounds: i64, output_cap: i64) -> i64 {
+    return rounds * (32768 * card.input_milli + output_cap * card.output_milli) / 1000;
+}
+fn setup_pick_model(cfg: ModelConfig&, listed: const u8[:]) -> bool {
+    var ids: u8[..128][>..] = []; var other: u8[>..] = [];
+    var start: i64 = 0; var i: i64 = 0;
+    while i < listed.len {
+        if listed[i] == 10 {
+            let id = listed[start..i];
+            if meta_agent_model(id) && ids.len < 9 { var held: u8[..128] = id; ids.push(held); }
+            else if id.len > 0 { if other.len > 0 { other.append(", "); } other.append(id); }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if ids.len == 0 { return false; }
+    var chosen: i64 = 0;
+    var k: i64 = 0;
+    while k < ids.len { if ids[k] == cfg.controller_model { chosen = k; } k += 1; }
+    if ids[chosen] != cfg.controller_model {
+        k = 0; while k < ids.len { if ids[k] == "muse-spark-1.3" { chosen = k; } k += 1; }
+    }
+    while true {
+        var frame: u8[>..] = [];
+        frame.append("CONTINUUM / CHOOSE THE META MODEL\n--------------------------------------------------------------------------\n");
+        frame.append("Models this key can use (read from the provider; listing is free).\nPrices: official rate card, USD per 1M tokens, checked 2026-11-04.\n\n");
+        var n: i64 = 0;
+        while n < ids.len {
+            let card = meta_model_card(ids[n]);
+            frame.append(str(if n == chosen { "> " } else { "  " }, n + 1, "  ", ids[n], "\n"));
+            if card.known {
+                frame.append(str("     in ", setup_rate(card.input_milli), "  cached ", setup_rate(card.cached_milli), "  out ", setup_rate(card.output_milli),
+                    "   one setup step <= ", setup_usd(setup_run_ceiling(card, cfg.max_tool_rounds, effort_output_cap(cfg.reasoning_effort))), "\n     ", card.note, "\n"));
+            } else { frame.append("     Not in Continuum's price table; see dev.meta.ai/docs/pricing-rate-limits\n"); }
+            n += 1;
+        }
+        if other.len > 0 { frame.append("\nNot offered (not tool-calling text models): "); frame.append(other); frame.append("\n"); }
+        frame.append(str("\nThe step bound is ", cfg.max_tool_rounds, " calls x (<= 32k input + output cap) at the chosen effort.\nMuse Spark Open is open-weight and is not served on this API.\n"));
+        frame.append("\n[1-9] Select    [Enter] Use the marked model\n[Esc] Cancel; nothing is saved\n");
+        ct_setup_draw(frame, 0);
+        let key = ct_tui_key(-1);
+        if key == 27 || key == 3 || key < 0 { return false; }
+        if key >= '1' && key < '1' + ids.len { chosen = key - '1'; }
+        if key == 13 || key == 10 { break; }
+    }
+    let card = meta_model_card(ids[chosen]);
+    let levels: const u8[:][..6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+    let count: i64 = if card.max_effort { 6 } else { 5 };
+    var effort: i64 = 4;
+    k = 0; while k < count { if levels[k] == cfg.reasoning_effort { effort = k; } k += 1; }
+    if effort >= count { effort = count - 1; }
+    while true {
+        var frame: u8[>..] = [];
+        frame.append("CONTINUUM / REASONING EFFORT\n--------------------------------------------------------------------------\n");
+        frame.append(str("Model  ", ids[chosen], "\n\nMore effort = more reasoning tokens: slower and billed as output.\nThe output cap grows with it so reasoning cannot crowd out the answer.\n\n"));
+        k = 0;
+        while k < count {
+            let cap = effort_output_cap(levels[k]);
+            frame.append(str(if k == effort { "> " } else { "  " }, k + 1, "  ", levels[k], "   cap ", cap, " tokens/response"));
+            if card.known { frame.append(str("   step <= ", setup_usd(setup_run_ceiling(card, cfg.max_tool_rounds, cap)))); }
+            frame.append("\n");
+            k += 1;
+        }
+        frame.append("\nMeta's cookbook notes xhigh currently reasons like high on Spark 1.3.\n");
+        frame.append("\n[1-6] Select    [Enter] Save model and effort\n[Esc] Cancel; nothing is saved\n");
+        ct_setup_draw(frame, 0);
+        let key = ct_tui_key(-1);
+        if key == 27 || key == 3 || key < 0 { return false; }
+        if key >= '1' && key < '1' + count { effort = key - '1'; }
+        if key == 13 || key == 10 { break; }
+    }
+    var candidate = cfg;
+    candidate.controller_model = ids[chosen]; candidate.task_model = ids[chosen];
+    candidate.reasoning_effort = levels[effort]; candidate.max_output_tokens = effort_output_cap(levels[effort]);
+    if !save_setup_settings(candidate) { return false; }
+    cfg = candidate;
+    return true;
+}
 fn setup_field(label: const u8[:], initial: const u8[:], value: u8[>..]&) -> bool {
     var buffer: u8[..128] = [0; 128]; var n: i64 = 0;
     if ct_setup_input(label, initial, buffer, n) != 0 || n <= 0 || n > 128 { return false; }
@@ -296,8 +447,8 @@ fn setup_network_view(text: const u8[:], out: u8[>..]&) {
 fn confirm_setup_job(cfg: ModelConfig, job: const u8[:]) -> bool {
     var frame: u8[>..] = [];
     frame.append("CONTINUUM / META REQUEST\n--------------------------------------------------------------------------\nConfirm Meta job\nNo provider usage until you press Enter.\n\n");
-    frame.append(str("Model     ", cfg.controller_model, "\n"));
-    if job == "test-key" { frame.append("Budget    One connection-test call, up to 256 output tokens.\n"); }
+    frame.append(str("Model     ", cfg.controller_model, "   effort ", cfg.reasoning_effort, "\n"));
+    if job == "test-key" { frame.append("Budget    One connection-test call at minimal effort, up to 1024 output\n          tokens.\n"); }
     else {
         frame.append(str("Budget    Up to ", cfg.max_tool_rounds, " controller calls; ", cfg.max_output_tokens, " output tokens/response.\n"));
         if job == "lab" { frame.append("          Plus one workload call. Simulator only; no physical writes.\n"); }
@@ -733,8 +884,9 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
     } else if step == 2 {
         out.append("Creates this router's admin credential, renames its Wi-Fi and\nrotates the passphrase. This host may drop off Wi-Fi and rejoin.\n\nFactory-only: a unit that is already configured refuses safely and\nnothing on it changes. On that failure you can take the unit over\nwith the admin password it already uses.\n");
     } else if step == 3 {
-        if has_key { out.append("A key is configured but not verified. One connection-test call\n(up to 256 output tokens) proves the provider accepts it before\nMeta is trusted with the router.\n"); }
-        else { out.append("Meta needs a key to set the router up. It is hidden while you\ntype, kept in this session unless you choose the Keychain, and\nnever printed or written to settings. One connection-test call\nthen proves the provider accepts it.\n"); }
+        if has_key { out.append("A key is configured but not verified. Continuum reads the models\nthis key can use (free), you pick one and its reasoning effort with\nprices from Meta's rate card, then one connection-test call proves\nthe provider accepts the key on that model.\n"); }
+        else { out.append("Meta needs a key to set the router up. It is hidden while you\ntype, kept in this session unless you choose the Keychain, and\nnever printed or written to settings. Then you pick the model and\neffort from the ones the key can use, and one connection-test call\nproves the provider accepts it.\n"); }
+        out.append(str("\nModel   ", cfg.controller_model, "   effort ", cfg.reasoning_effort, "\n"));
     } else if step == 4 {
         out.append("Meta inspects the router and applies its owned baseline: vendor\nservices stripped, fully reversible. No reboot, no reset and no\nfirmware change. The step counts only when the router's own receipt\nshows the baseline applied with runtime and recovery verified.\n");
     } else if step == 5 {
@@ -803,7 +955,7 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
     }
     else if step == 1 { out.append("[Enter] Bind this router\n"); }
     else if step == 2 { out.append("[Enter] Enroll this router\n"); }
-    else if step == 3 { out.append(if has_key { "[Enter] Verify the key (one call)    [k] New key\n" } else { "[Enter] Enter the Meta key\n" }); }
+    else if step == 3 { out.append(if has_key { "[Enter] Choose the model, then verify    [k] New key\n" } else { "[Enter] Enter the Meta key\n" }); }
     else if step == 4 { out.append("[Enter] Let Meta set it up\n"); }
     else if step == 5 { out.append("[Enter] Reboot now (one time)\n"); }
     else if step == 6 { out.append("[Enter] Verify persistence\n"); }
@@ -1048,7 +1200,24 @@ fn run_setup_tui() -> bool {
     var settled = false;
     var busy = false; var dirty = true; var verified = false;
     var job: u8[>..] = [];
+    // Step 3 reads the key's own model catalog, then the owner picks a model
+    // and effort before the one billed connection test.
+    var models: u8[>..] = []; var pick_pending = false;
     while true {
+        if pick_pending && !busy {
+            pick_pending = false; notice = [];
+            if !setup_pick_model(cfg, models) { notice.append("No model saved. Press Enter to choose again."); }
+            else {
+                verified = false;
+                job = []; job.append("test-key");
+                if !confirm_setup_job(cfg, job) { notice.append("Key not tested; Meta setup stays locked until it is."); }
+                else if ct_setup_job_start(job) == 0 {
+                    busy = true; details = []; wizard_job = 3;
+                    notice.append(str("Testing the key on ", cfg.controller_model, " with one connection-test call."));
+                } else { notice.append("Could not start the key test."); }
+            }
+            dirty = true;
+        }
         if dirty {
             var wframe: u8[>..] = [];
             if wizard {
@@ -1152,17 +1321,17 @@ fn run_setup_tui() -> bool {
                 } else if wstep == 3 {
                     var have_key = meta_credentials_available(cfg);
                     if key == 'k' || !have_key {
-                        let key_result = ct_tui_key_setup(); verified = false;
+                        let key_result = ct_tui_key_setup(); verified = false; models = [];
                         have_key = key_result == 1 || key_result == 2;
                         if !have_key { notice.append("Key entry cancelled or rejected; nothing was tested."); }
                     }
-                    if have_key {
-                        job = []; job.append("test-key");
-                        if !confirm_setup_job(cfg, job) { notice.append("Key not tested; Meta setup stays locked until it is."); }
-                        else if ct_setup_job_start(job) == 0 {
-                            busy = true; details = []; wizard_job = 3;
-                            notice.append("Testing the key with one connection-test call.");
-                        } else { notice.append("Could not start the key test."); }
+                    if have_key && models.len > 0 { pick_pending = true; }
+                    else if have_key {
+                        job = []; job.append("models");
+                        if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; wizard_job = 14;
+                            notice.append("Reading the models this key can use (a free catalog read).");
+                        } else { notice.append("Could not start the model listing."); }
                     }
                 } else if wstep == 4 || wstep == 5 || wstep == 6 || (wstep == 7 && !qos_checked) || (wstep == 0 && key == 'u') {
                     // One deterministic device job per step; only step 4 is Meta.
@@ -1439,6 +1608,19 @@ fn run_setup_tui() -> bool {
                         if ok || setup_contains(text, "secured bands") { settled = true; }
                     } else if finished == 9 {
                         if ok { settled = true; notice.append("Password accepted; the router is now bound under it."); }
+                    } else if finished == 14 {
+                        let line = setup_line_with(text, "META_MODELS ");
+                        if ok && line.len > 12 {
+                            models = [];
+                            for b in line[12..] { if b == ' ' { models.push(10); } else if b > 32 { models.push(b); } }
+                            models.push(10);
+                            pick_pending = true;
+                        } else {
+                            step_failed = true;
+                            fail_reason.append(if setup_contains(text, "status=401") || setup_contains(text, "status=403") {
+                                "the provider refused this key while listing its models (no tokens were used)" }
+                                else { "could not read this key's model list from the provider" });
+                        }
                     } else if finished == 3 {
                         verified = ok;
                         if ok { details.append("KEY        accepted by the provider (one connection-test call)\n"); }
