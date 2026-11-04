@@ -22,7 +22,7 @@ extern fn ct_resource_root_enter() -> i32;
 
 // One place for the released version. Bump here and in CHANGELOG.md together.
 fn version_line() -> const u8[:] {
-    return "continuum 0.2.5";
+    return "continuum 0.2.6";
 }
 
 // The status entrypoint reports each module's implementation state. Calling

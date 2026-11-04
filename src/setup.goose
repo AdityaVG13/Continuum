@@ -1510,8 +1510,13 @@ fn run_setup_tui() -> bool {
                         // minting a new empty slot. If that credential no longer
                         // answers (a real reset), enrollment runs anyway and
                         // stages into the same slot.
-                        let prepared = device_select(setup_directory(), network, wd.candidate_id, stem, wd.connection.port, true);
-                        if !prepared { notice.append("The router is no longer observed; press a, then d/p."); }
+                        // An interrupted ceremony stays "enrolling": re-binding would
+                        // reset it to "selected" and lose the rejoin of the renamed
+                        // Wi-Fi that the retry needs (the router may be off this
+                        // host's current network entirely).
+                        let prepared = wd.phase == "enrolling" ||
+                            device_select(setup_directory(), network, wd.candidate_id, stem, wd.connection.port, true);
+                        if !prepared { notice.append("The router is not in reach. Connect to it (cable, or its Wi-Fi), then press Enter."); }
                         else if ct_setup_job_start(job) == 0 {
                             busy = true; details = []; wizard_job = 2;
                             notice.append("Enrolling: 2-5 minutes. The router restarts its Wi-Fi under the new\nname and this Mac rejoins it by itself; Wi-Fi drops meanwhile.");

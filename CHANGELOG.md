@@ -3,6 +3,14 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.6] - 2026-11-04
+
+- Relaunching after an interrupted enrollment retries it as is (rejoining the
+  renamed Wi-Fi first) instead of re-binding, which reset the phase and lost
+  that rejoin.
+- "Router not in reach" says what to do (connect by cable or Wi-Fi, then
+  Enter) instead of naming panel keys.
+
 ## [0.2.5] - 2026-11-04
 
 - **Setup no longer meets a restarting SSH daemon mid-apply.** The recovery
