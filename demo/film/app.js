@@ -17,162 +17,276 @@
   const params = new URLSearchParams(location.search);
 
   const CUES = [
-    { t: 8.0,  line: "There's a computer in my house I never log into." },
-    { t: 14.0, line: "That's the router.\nAgents treat it like weather." },
-    { t: 22.0, line: "They wait out the queue.\nOr they take a shell and hope." },
-    { t: 30.0, line: "I didn't want a shell.\nI wanted a cage." },
-    { t: 38.0, line: "This is Continuum." },
-    { t: 46.0, line: "Factory-reset an ASUS GT-AX11000\nand there is no admin password.\nNothing to type." },
-    { t: 56.0, line: "The box is waiting for someone to invent one." },
-    { t: 64.0, line: "Continuum invents it.\nLocks it in the Mac keychain first.\nThen proves the router accepted it." },
-    { t: 76.0, line: "After that the factory default is dead.\nA retry looks.\nIt does not run the ceremony twice." },
-    { t: 86.0, line: "The password never reaches the model." },
-    { t: 94.0, line: "Then I write the list.\nWhat Meta is allowed to touch." },
-    { t: 102.0, line: "It can read the list.\nIt cannot add to it." },
-    { t: 110.0, line: "Reboot stays off unless I say so\nwith a separate key." },
-    { t: 120.0, line: "muse-wonder-1.0 does not get a shell.\nIt gets tools with names.\nmanage_device. apply_qos." },
-    { t: 132.0, line: "I said keep FTP.\nIt has to." },
-    { t: 138.0, line: "A sentence in the chat cannot mint a reboot." },
-    { t: 146.0, line: "Every write is a transaction.\nPicture of before. Change. Independent read." },
-    { t: 156.0, line: "If the box can't do it, we refuse.\nWe do not leave it half-set." },
-    { t: 166.0, line: "Then it goes quiet.\nA healthy night costs zero Muse calls." },
-    { t: 174.0, line: "I'm not quoting a number I didn't measure." },
-    { t: 178.0, line: "A Meta agent that can operate a real router —\nand cannot run away with it." },
+    { t: 6.0,   line: "Every house has a computer nobody logs into.\nThe router." },
+    { t: 14.0,  line: "Setting one up still means a sticker,\na browser tab, and a password you'll forget." },
+    { t: 23.0,  line: "When it misbehaves, you reboot it and hope." },
+    { t: 30.0,  line: "Continuum takes the whole thing over.\nOne command." },
+    { t: 44.0,  line: "It doesn't care how you're connected.\nA cable. Your Wi-Fi. Or nothing at all." },
+    { t: 53.0,  line: "I factory-reset this ASUS. The Mac has no network.\nContinuum says so, and asks for the setup network on the label." },
+    { t: 64.0,  line: "It joins, finds the router,\nand names what's answering. Nothing is written yet." },
+    { t: 74.0,  line: "A factory router has no password.\nContinuum mints one, locks it in the Keychain first,\nthen proves the router took it." },
+    { t: 87.0,  line: "Already configured? Type its password once.\nVerified. Nothing written." },
+    { t: 95.0,  line: "Then Meta. Continuum reads the models your key can use,\nwith Meta's own prices, and a ceiling on what one step can cost." },
+    { t: 107.0, line: "Muse Spark 1.3. One test call proves the key." },
+    { t: 115.0, line: "Spark gets named tools, not a shell.\nIt strips the vendor services,\nand the router's own receipt decides if it counts." },
+    { t: 128.0, line: "One reboot, approved by me.\nContinuum waits for the router to go dark and come back,\nthen proves the settings survived." },
+    { t: 143.0, line: "It shapes the upload queue with CAKE,\nand reads the qdisc back from the router itself." },
+    { t: 153.0, line: "Then it measures. Idle, then loaded.\nOnly a claimable run opens the last gate." },
+    { t: 163.0, line: "And it stays. A resident monitor.\nA quiet night costs zero model calls." },
+    { t: 171.0, line: "No numbers I didn't measure." },
+    { t: 175.0, line: "A Meta agent that runs a real router,\nand can't run away with it." },
   ];
 
   const SCENES = [
     { t: 0, name: "title" },
-    { t: 8, name: "house" },
-    { t: 30, name: "cage-wanted" },
-    { t: 46, name: "factory" },
-    { t: 64, name: "enroll" },
-    { t: 94, name: "policy" },
-    { t: 120, name: "meta" },
-    { t: 166, name: "quiet" },
+    { t: 6, name: "house" },
+    { t: 44, name: "reach" },
+    { t: 74, name: "enroll" },
+    { t: 95, name: "meta" },
+    { t: 128, name: "proof" },
+    { t: 143, name: "tune" },
+    { t: 163, name: "resident" },
   ];
 
   const TUI = {
-    deviceFactory: `<span class="hd">CONTINUUM - DEVICE              META NOT CONFIGURED</span>
- <span class="dim">1 Overview  2 Network  [3] Device  4 Programs  5 Resident</span>
-<span class="dim">WATCHING just now | SELECTED en0:192.168.50.1 factory-pending
-PERMISSION none | RESIDENT not running</span>
+    noRouter: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 1 OF 8   BIND THE ROUTER</span>
 
-DEVICE / LIFECYCLE
+No router is in reach of this Mac yet. Any router, any link:
 
-Selected    en0:192.168.50.1:80
-Identity    GT-AX11000 / <span class="redact">mac</span> / 3.0.0.4/388/23285
-Phase       <span class="hi">factory-pending</span>
-SETUP       [ ] not granted
-RUNTIME     [ ] not verified
-RECOVERY    [ ] not verified
-PERSIST     [ ] not verified
-READY       false
+  Cable   plug this Mac into one of the router's LAN ports, then Enter
+  Wi-Fi   press w and type the router's network name. A factory-reset
+          router broadcasts an open setup network (name on its label)
 
-<span class="dim">A factory unit has no admin password to type.</span>
-<span class="hd">[n] Enroll: create the admin credential on a factory unit</span>`,
+<span class="dim">Nothing has been written anywhere.</span>
 
-    enrollRun: `<span class="hd">CONTINUUM - RESULT                         ENROLL</span>
-<span class="dim">execute granted · vault first · then the vendor form</span>
+Router  none bound   Phase  unselected   Key  missing
 
-  credential   <span class="hi">minted</span>
-  staging      macOS keychain  <span class="ok">before first write</span>
-  qis          submitting vendor first-run
-  protected    waiting on readback
-  factory      admin/admin still live until prove
+<span class="hd">[w] Join a Wi-Fi network    [Enter] Look again</span>
+<span class="dim">[Esc] Quit    [a] Advanced panels</span>
+<span class="dim"></span><span class="hd">[BIND]</span><span class="dim">  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
 
-<span class="dim">The model is not in this path.
-A provider outage cannot leave the box with no way in.</span>`,
+    join: `<span class="hd">CONTINUUM / JOIN WI-FI</span>
+<span class="dim">--------------------------------------------------------------</span>
+Network  <span class="hi">ASUS_5C</span>   on en0
 
-    enrollOk: `<span class="hd">CONTINUUM - RESULT                         ENROLL</span>
-<span class="ok">verified</span>
+Is it open (a factory-reset router's setup network) or protected?
+This Mac leaves its current Wi-Fi network to join it.
 
-  credential   staged (keychain)  never in transcript
-  qis          submitted
-  protected    read  <span class="ok">verified</span>
-  factory      default <span class="bad">dead</span>
-  retry        inspect — ceremony not replayed
-  model        <span class="dim">did not receive the secret</span>
+<span class="hd">[o] Open network    [p] Enter its password</span>
+<span class="dim">[Esc] Cancel; nothing changes</span>`,
 
-<span class="dim">Identity  GT-AX11000 / firmware 3.0.0.4
-Phase     enrolled</span>`,
+    reach: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 1 OF 8   BIND THE ROUTER</span>
 
-    policy: `<span class="hd">CONTINUUM - PERMISSIONS              OWNER POLICY</span>
-<span class="dim">Meta may read this. Meta cannot widen it.</span>
+Routers this Mac can reach:
 
-  inspect          allow
-  enroll           allow
-  runtime          allow
-  apply            allow
-  restore          allow
-  apply_qos        allow
-  restore_qos      allow
-  <span class="bad">reboot            deny</span>
+<span class="hi">> 1  en0:192.168.50.1</span>   (Wi-Fi, default route)
+     <span class="ok">ASUS router -- supported</span>
 
-  protected        FTP  (must remain)
-  local programs   opt-in, sandboxed
-  reboot           separate key  [b]
+<span class="dim">Binding records the target only. No credential is created
+and nothing is written to the router yet.</span>
 
-<span class="dim">A model message is not authority.</span>`,
+Router  none bound   Phase  unselected   Key  missing
 
-    talk: `<span class="hd">CONTINUUM - TALK                   muse-wonder-1.0</span>
-<span class="dim">owner · 1 / 4 calls this session · 2048 output cap</span>
+<span class="ok">Joined ASUS_5C; this Mac is 192.168.50.23 on it.</span>
 
-<span class="hi">Keep FTP enabled. Inspect and say what you would
-change. Do not reboot.</span>
+<span class="hd">[Enter] Bind the marked router    [1-9] Another    [w] Wi-Fi</span>
+<span class="dim">[Esc] Quit    [a] Advanced panels</span>
+<span class="dim"></span><span class="hd">[BIND]</span><span class="dim">  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
 
-<span class="dim">tool   manage_device
-op     inspect
-cred   not in context</span>`,
+    enroll: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 2 OF 8   ENROLL THE ROUTER</span>
 
-    tool: `<span class="hd">CONTINUUM - RESULT                    manage_device</span>
-<span class="dim">operation  apply · candidate  en0:192.168.50.1</span>
+Creates this router's admin credential, renames its Wi-Fi and
+rotates the passphrase. This host may drop off Wi-Fi and rejoin.
 
-  samba     on  →  <span class="hi">off</span>
-  ftp       on  →  <span class="ok">on</span>   (protected)
-  dlna      on  →  on
-  daap      on  →  on
-  webdav    on  →  on
+Factory-only: a unit that is already configured refuses safely and
+nothing on it changes. On that failure you can take the unit over
+with the admin password it already uses.
 
-  reboot    <span class="bad">refused</span>  owner policy
-  shell     never issued
-  password  never sent`,
+Router  en0:192.168.50.1   Phase  selected   Key  missing
 
-    receipt: `<span class="hd">CONTINUUM - RECEIPT                         APPLY</span>
+<span class="hi">Enrolling. This can take a minute.</span>
+<span class="dim">Running. q cancels; an uncertain step is never replayed.</span>
 
-  before-image     captured
-  change           samba disabled
-  independent read <span class="ok">verified</span>
-  restore          available  [r]
+<span class="dim">[q] Cancel this step and quit</span>
+<span class="dim">BIND  </span><span class="hd">[ENROLL]</span><span class="dim">  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
 
-<span class="hd">CONTINUUM - RESULT                         read_qos</span>
-  root             vendor-managed
-  <span class="bad">refused          qdisc_root_already_managed</span>
-  half-state       none
+    takeover: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 2 OF 8   ENROLL THE ROUTER</span>
 
-<span class="dim">A model's claim of success is not evidence.
-The readback is.</span>`,
+Router  en0:192.168.50.1   Phase  selected   Key  missing
 
-    resident: `<span class="hd">CONTINUUM - RESIDENT                         LIVE</span>
+<span class="hd">WHY IT STOPPED</span>
+  This router is already set up, so the factory ceremony refused
+  and nothing on it changed.
 
-STATE     watching   pid  41882
-SAMPLES   24  every  15000 ms
-INCIDENT  none
-META      incidents off  —  calls this hour  <span class="ok">0</span> / 4
-ASSESS    quiet
+<span class="hd">WHAT TO DO</span>
+  Take it over as it is: press p and type the admin password this
+  router already uses. Continuum verifies it, stores it in the OS
+  vault, and continues -- nothing on the router is changed.
 
-<span class="dim">Healthy recurring work uses no model calls.
-Starting granted no write and no reboot.</span>`,
+<span class="hd">[Enter] Retry    [p] Take over    [i] Raw output</span>
+<span class="dim">BIND  </span><span class="hd">[ENROLL]</span><span class="dim">  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
+
+    picker: `<span class="hd">CONTINUUM / CHOOSE THE META MODEL</span>
+<span class="dim">--------------------------------------------------------------</span>
+Models this key can use (read from the provider; listing is free).
+Prices: official rate card, USD per 1M tokens, checked 2026-11-04.
+
+<span class="hi">> 1  muse-spark-1.3</span>
+     in $1.250  cached $0.150  out $4.250   one setup step <= <span class="ok">$0.442</span>
+     Latest Spark; tuned for tool loops. Recommended for this job.
+  2  muse-wonder-1.0
+     in $4.000  cached $0.200  out $20.000   one setup step <= $1.835
+     Most capable; long multi-step agent work. Slowest, priciest.
+  3  muse-spark-1.3-contributor
+     in $0.100  cached $0.002  out $0.200   one setup step <= $0.026
+     Contributor mode: Meta may train on your prompts and replies.
+
+<span class="dim">Not offered (not tool-calling text models): muse-image-1.0, sam-3.1
+Muse Spark Open is open-weight and is not served on this API.</span>
+
+<span class="hd">[1-9] Select    [Enter] Use the marked model</span>`,
+
+    effort: `<span class="hd">CONTINUUM / REASONING EFFORT</span>
+<span class="dim">--------------------------------------------------------------</span>
+Model  muse-spark-1.3
+
+More effort = more reasoning tokens: slower and billed as output.
+The output cap grows with it so reasoning cannot crowd out the answer.
+
+  1  minimal   cap 2048 tokens/response   step <= $0.198
+  2  low       cap 4096 tokens/response   step <= $0.233
+  3  medium    cap 8192 tokens/response   step <= $0.303
+  4  high      cap 16384 tokens/response   step <= $0.442
+<span class="hi">> 5  xhigh     cap 16384 tokens/response   step <= $0.442</span>
+  6  max       cap 32768 tokens/response   step <= $0.720
+
+<span class="hd">[1-6] Select    [Enter] Save model and effort</span>`,
+
+    setup: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 4 OF 8   SET THE ROUTER UP</span>
+
+Meta inspects the router and applies its owned baseline: vendor
+services stripped, fully reversible. No reboot, no reset and no
+firmware change. The step counts only when the router's own receipt
+shows the baseline applied with runtime and recovery verified.
+
+Router  en0:192.168.50.1   Phase  enrolled   Key  <span class="ok">verified</span>
+
+KEY        accepted by the provider (one connection-test call)
+
+<span class="hi">Meta is working. q cancels.</span>
+<span class="dim">BIND  ENROLL  KEY  </span><span class="hd">[SETUP]</span><span class="dim">  REBOOT  VERIFY  TUNE  MEASURE</span>`,
+
+    applied: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 5 OF 8   REBOOT</span>
+
+One reboot proves the baseline persists. The network drops for
+a few minutes. This approves exactly one reboot, nothing else.
+
+Router  en0:192.168.50.1   Phase  baseline_applied   Key  verified
+
+META SAID  &lt;Meta's one-line summary from the run&gt;
+RECEIPT    <span class="ok">baseline applied; runtime and recovery verified by the router</span>
+
+<span class="hd">[Enter] Reboot now (one time)</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  </span><span class="hd">[REBOOT]</span><span class="dim">  VERIFY  TUNE  MEASURE</span>`,
+
+    waiting: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 6 OF 8   WAITING FOR THE ROUTER</span>
+
+Reboot requested. Continuum waits for the router to stop answering
+and answer again (a protected read every few seconds; nothing is
+written). The request's own exit code is not trusted either way.
+
+  Went down   <span class="hi">yes</span>
+
+Router  en0:192.168.50.1   Phase  reboot_pending   Key  verified
+
+<span class="dim">Waiting for the router; keys are locked.</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  </span><span class="hd">[VERIFY]</span><span class="dim">  TUNE  MEASURE</span>`,
+
+    persist: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 7 OF 8   TUNE</span>
+
+Shaping is one CAKE root qdisc on the WAN egress. First a read-only
+preflight checks that the router has tc and reads its current root
+queue. The preflight writes nothing.
+
+PERSIST    <span class="ok">verified by the router: new boot identity, owned baseline in force</span>
+
+<span class="hd">[Enter] Read the WAN queue (read-only)</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  </span><span class="hd">[TUNE]</span><span class="dim">  MEASURE</span>`,
+
+    tuned: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 8 OF 8   MEASURE</span>
+
+One upload measurement across the WAN: idle probes, then the same
+probes while uploading. Only an upload crosses the shaped queue.
+Nothing on the router is written.
+
+PREFLIGHT  tc present; eth0 root queue now: pfifo_fast
+QDISC      cake &lt;N&gt; kbit/s on eth0
+READBACK   <span class="ok">verified on the router</span>: qdisc cake 8001: root bandwidth &lt;N&gt;Kbit
+
+<span class="hd">[Enter] Run the upload measurement    [c] Change target</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  </span><span class="hd">[MEASURE]</span><span class="dim"></span>`,
+
+    measured: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 8 OF 8   MEASURE</span>
+
+The measurement below is claimable. Qualifying records it as the
+LOAD gate; only a run taken after the last change can count.
+
+MEASURED   <span class="ok">claimable</span>: 20 idle and 20 loaded samples
+EVIDENCE   ~/.config/continuum/device/measure-&lt;ts&gt;.json
+
+<span class="hd">[Enter] Qualify with this measurement</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  </span><span class="hd">[MEASURE]</span><span class="dim"></span>`,
+
+    ready: `<span class="hd">CONTINUUM / SETUP</span>
+<span class="dim">--------------------------------------------------------------</span>
+<span class="hi">STEP 8 OF 8   SETUP COMPLETE</span>
+
+Every gate is earned; the panels hold the evidence.
+
+Monitor  <span class="ok">monitoring</span>, pid &lt;pid&gt;, &lt;n&gt; samples every 15000 ms
+
+Router  en0:192.168.50.1   Phase  ready   Key  verified
+
+<span class="hd">[Enter] Refresh    [u] Undo the shaping</span>
+<span class="dim">[Esc] Quit    [a] Advanced panels</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  MEASURE</span>`,
   };
 
   const TUI_CUES = [
-    { t: 46, id: "deviceFactory" },
-    { t: 64, id: "enrollRun" },
-    { t: 76, id: "enrollOk" },
-    { t: 94, id: "policy" },
-    { t: 120, id: "talk" },
-    { t: 132, id: "tool" },
-    { t: 146, id: "receipt" },
-    { t: 166, id: "resident" },
+    { t: 50, id: "noRouter" },
+    { t: 60, id: "join" },
+    { t: 65, id: "reach" },
+    { t: 74, id: "enroll" },
+    { t: 87, id: "takeover" },
+    { t: 95, id: "picker" },
+    { t: 105, id: "effort" },
+    { t: 112, id: "setup" },
+    { t: 121, id: "applied" },
+    { t: 130, id: "waiting" },
+    { t: 139, id: "persist" },
+    { t: 145, id: "tuned" },
+    { t: 155, id: "measured" },
+    { t: 163, id: "ready" },
   ];
 
   CUES.forEach((c) => {
@@ -213,7 +327,7 @@ Starting granted no write and no reboot.</span>`,
   }
 
   /* ---------- three world ---------- */
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: params.has("render") });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.28;
@@ -476,15 +590,17 @@ Starting granted no write and no reboot.</span>`,
 
   const SHOTS = [
     { t: 0,   p: [0.62, 0.78, 1.55], l: [0.28, 0.52, 0.12], fov: 28, exp: 0.35 },
-    { t: 8,   p: [2.15, 1.55, 3.85], l: [0.10, 0.70, 0.10], fov: 32, exp: 1.08 },
-    { t: 18,  p: [1.15, 1.05, 2.35], l: [0.22, 0.52, 0.14], fov: 30, exp: 1.12 },
-    { t: 32,  p: [0.72, 0.86, 1.72], l: [0.28, 0.52, 0.12], fov: 28, exp: 1.10 },
-    { t: 46,  p: [0.78, 0.90, 1.82], l: [0.20, 0.52, 0.12], fov: 29, exp: 1.08 },
-    { t: 64,  p: [0.92, 0.92, 1.78], l: [0.38, 0.52, 0.18], fov: 30, exp: 1.10 },
-    { t: 94,  p: [1.05, 1.05, 2.05], l: [0.28, 0.58, 0.12], fov: 32, exp: 1.12 },
-    { t: 120, p: [0.85, 0.92, 1.78], l: [0.28, 0.54, 0.12], fov: 29, exp: 1.10 },
-    { t: 146, p: [0.90, 0.95, 1.85], l: [0.28, 0.58, 0.16], fov: 29, exp: 1.10 },
-    { t: 166, p: [2.35, 1.65, 4.05], l: [0.05, 0.70, 0.10], fov: 32, exp: 1.00 },
+    { t: 6,   p: [2.15, 1.55, 3.85], l: [0.10, 0.70, 0.10], fov: 32, exp: 1.08 },
+    { t: 16,  p: [1.15, 1.05, 2.35], l: [0.22, 0.52, 0.14], fov: 30, exp: 1.12 },
+    { t: 30,  p: [0.72, 0.86, 1.72], l: [0.28, 0.52, 0.12], fov: 28, exp: 1.10 },
+    { t: 44,  p: [0.40, 0.95, 1.95], l: [-0.10, 0.52, 0.12], fov: 30, exp: 1.08 },
+    { t: 64,  p: [0.78, 0.90, 1.82], l: [0.20, 0.52, 0.12], fov: 29, exp: 1.08 },
+    { t: 74,  p: [0.92, 0.92, 1.78], l: [0.38, 0.52, 0.18], fov: 30, exp: 1.10 },
+    { t: 95,  p: [0.55, 0.95, 1.85], l: [0.05, 0.55, 0.12], fov: 30, exp: 1.10 },
+    { t: 115, p: [1.05, 1.05, 2.05], l: [0.28, 0.58, 0.12], fov: 32, exp: 1.12 },
+    { t: 128, p: [0.85, 0.92, 1.78], l: [0.28, 0.54, 0.12], fov: 29, exp: 1.05 },
+    { t: 143, p: [1.60, 1.20, 2.80], l: [0.80, 0.60, 0.30], fov: 30, exp: 1.10 },
+    { t: 163, p: [2.35, 1.65, 4.05], l: [0.05, 0.70, 0.10], fov: 32, exp: 1.00 },
     { t: 176, p: [0.70, 0.82, 1.55], l: [0.28, 0.52, 0.12], fov: 26, exp: 0.42 },
   ];
 
@@ -509,6 +625,10 @@ Starting granted no write and no reboot.</span>`,
     const u = b === a ? 1 : smoother(a.t, b.t, t);
     mix3(camPos, a.p, b.p, u);
     mix3(camLook, a.l, b.l, u);
+    // While the terminal occupies the right half, pan the set into the left
+    // half so the router and laptop stay visible beside it.
+    const pan = 0.36 * smoother(46, 50, t) * (1 - smoother(175, 177, t));
+    camPos.x += pan; camLook.x += pan;
     camera.position.copy(camPos);
     camera.lookAt(camLook);
     camera.fov = lerp(a.fov, b.fov, u);
@@ -524,26 +644,26 @@ Starting granted no write and no reboot.</span>`,
   function sync(t) {
     placeCamera(t);
 
-    const houseOn = smoother(6.5, 11, t);
+    const houseOn = smoother(4.5, 9, t);
     windowLight.intensity = 3.2 * houseOn;
     glow.material.opacity = 0.12 + 0.16 * houseOn;
 
     congestion = 0;
-    if (t >= 16 && t < 46) congestion = smoother(16, 24, t) * (1 - smoother(40, 46, t));
-    else if (t >= 156) congestion = 0;
+    if (t >= 14 && t < 44) congestion = smoother(14, 22, t) * (1 - smoother(38, 44, t));
+    else if (t >= 147) congestion = 0;
     else congestion = 0.12;
 
-    const cageOn = smoother(94, 104, t);
+    const cageOn = smoother(115, 124, t);
     cage.scale.setScalar(0.15 + 0.85 * cageOn);
     cageMat.opacity = 0.85 * cageOn;
     ports.forEach((p) => { p.visible = cageOn > 0.35; p.scale.setScalar(clamp(cageOn * 1.2, 0, 1)); });
     rim.intensity = 1.4 * cageOn;
 
-    const enroll = t >= 64 && t < 94;
-    vaultLid.rotation.x = enroll ? -1.15 * smoother(64, 70, t) : 0;
-    if (t >= 68 && t < 78) {
+    const enroll = t >= 74 && t < 95;
+    vaultLid.rotation.x = enroll ? -1.15 * smoother(74, 79, t) : 0;
+    if (t >= 78 && t < 86) {
       keySpark.visible = true;
-      const u = smoother(68, 76, t);
+      const u = smoother(78, 85, t);
       keySpark.position.lerpVectors(
         new THREE.Vector3(0.62, 0.52, 0.28),
         new THREE.Vector3(0.28, 0.52, 0.12),
@@ -553,14 +673,14 @@ Starting granted no write and no reboot.</span>`,
       keySpark.visible = false;
     }
 
-    const enrolled = t >= 76;
-    led.material.color.set(enrolled ? 0x8fd0c8 : (t % 1.2 < 0.6 ? 0xc9a227 : 0x3a3010));
+    const enrolled = t >= 86;
+    const dark = t >= 132 && t < 137.5;
+    led.material.color.set(dark ? 0x050505 : enrolled ? 0x8fd0c8 : (t % 1.2 < 0.6 ? 0xc9a227 : 0x3a3010));
 
-    if (t >= 132) pips[0].material.color.set(0x3a2222);
-    else pips[0].material.color.set(0x8fd0a8);
+    pips.forEach((pip, i) => pip.material.color.set(dark ? 0x050505 : (t >= 121 && i !== 1) ? 0x3a2222 : 0x8fd0a8));
 
-    if (t >= 138 && t < 146) {
-      rebootPulse = Math.sin((t - 138) * 18) * 0.012;
+    if (t >= 128 && t < 132) {
+      rebootPulse = Math.sin((t - 128) * 18) * 0.012;
       portReboot.position.x = 0.64 + rebootPulse;
       cap.material.color.set(0xc96b6b);
     } else {
@@ -570,13 +690,13 @@ Starting granted no write and no reboot.</span>`,
 
     receipt.visible = false;
 
-    screen.material.opacity = t < 28 ? 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(t * 6)) : (t < 46 ? 0.12 : 0.28);
-    screen.material.color.set(t < 46 && t > 22 ? 0xc9a227 : 0x7ec9d4);
+    screen.material.opacity = t < 28 ? 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(t * 6)) : (t < 44 ? 0.12 : 0.28);
+    screen.material.color.set(t < 44 && t > 20 ? 0xc9a227 : 0x7ec9d4);
 
-    counter.classList.toggle("show", t >= 164 && t < 176);
+    counter.classList.toggle("show", t >= 165 && t < 175);
     callN.textContent = "0";
 
-    titles.classList.toggle("show", t < 7.6 || (t >= 37.5 && t < 43.5));
+    titles.classList.toggle("show", t < 5.6 || (t >= 36.5 && t < 43.5));
     endcard.classList.toggle("show", t >= 176.2);
 
     let tuiId = null;
@@ -643,6 +763,20 @@ Starting granted no write and no reboot.</span>`,
   window.addEventListener("resize", resize);
   resize();
 
+  // Deterministic frame stepping for offline rendering (demo/film/render.mjs):
+  // ?render=1 stops the clock; window.__frame(t, dt) draws exactly time t.
+  const rendering = params.has("render");
+  if (rendering) {
+    playing = false;
+    app.classList.add("record", "render");
+    window.__frame = (t, dt) => {
+      time = t;
+      sync(time);
+      tickPackets(dt, time);
+      renderer.render(scene, camera);
+      return true;
+    };
+  }
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
@@ -657,7 +791,7 @@ Starting granted no write and no reboot.</span>`,
     } catch (err) {
       console.error("film frame", time.toFixed(2), err);
     }
-    requestAnimationFrame(loop);
+    if (!rendering) requestAnimationFrame(loop);
   }
   window.addEventListener("error", (e) => console.error("film error", e.message, e.lineno));
   requestAnimationFrame(loop);
