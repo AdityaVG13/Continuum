@@ -355,7 +355,7 @@ fn setup_device_view(out: u8[>..]&) {
         "\nREADY        ", if d.setup_approved && d.runtime_verified && d.recovery_verified &&
             d.persistence_verified && d.network_load_verified { "true" } else { "false" },
         "\nReason       ", d.reason, "\n\n"));
-    out.append("[i] Protected inspection  [u] Authorize credential access\n[n] Enroll: create the admin credential on a factory unit\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nREADY needs every gate plus a claimable --measure run recorded after the last lifecycle change; --device-qualify <evidence> --execute opens it. General controller crash recovery remains unqualified.\n");
+    out.append("[i] Protected inspection  [u] Authorize credential access\n[Enter] Next step: bind / enroll / re-enroll after a reset / Meta setup\n[n] Enroll: create the admin credential on a factory unit\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nREADY needs every gate plus a claimable --measure run recorded after the last lifecycle change; --device-qualify <evidence> --execute opens it. General controller crash recovery remains unqualified.\n");
 }
 fn confirm_device_job(job: const u8[:]) -> bool {
     var frame: u8[>..] = [];
@@ -385,6 +385,63 @@ fn confirm_device_job(job: const u8[:]) -> bool {
     return false;
 }
 
+// Enter on the Device panel walks the lifecycle. A default-route candidate is
+// only evidence of a gateway, not of the intended router, so this helper
+// returns it only when it is unambiguous; several candidates stay an explicit
+// choice (p) instead of a guess.
+fn setup_gateway_candidate(network: const u8[:]) -> u8[>..] {
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(network, doc, decoded);
+    var found: u8[>..] = []; var count: i64 = 0;
+    if root {
+        let candidates = json::member(root, "candidates");
+        if candidates {
+            var c = candidates.first;
+            while c {
+                let source, s = json::as_string(json::member(c, "source"));
+                let id, i = json::as_string(json::member(c, "candidate_id"));
+                if s && i && source == "default_route" { count += 1; found.append(id); }
+                c .= c.next;
+            }
+        }
+    }
+    if count == 1 { return found; }
+    var none: u8[>..] = [];
+    return none;
+}
+fn confirm_bind(candidate: const u8[:]) -> bool {
+    var frame: u8[>..] = [];
+    frame.append("CONTINUUM / BIND THIS ROUTER\n--------------------------------------------------------------------------\n");
+    frame.append(str("Candidate  ", candidate, "  (this host's default route)\n\n"));
+    frame.append("Record it as this installation's router?\nNo credential is created and nothing is written to the router.\n\n[Enter] Bind\n[Esc] Cancel\n");
+    ct_setup_draw(frame, 0);
+    while true {
+        let key = ct_tui_key(-1);
+        if key == 13 || key == 10 { return true; }
+        if key == 27 || key == 3 || key < 0 { return false; }
+    }
+    return false;
+}
+// A saved binding that no longer answers is indistinguishable from a working
+// one without a protected read, so the operator -- who knows the unit was
+// reset -- chooses the recovery explicitly.
+fn setup_next_menu(d: DeviceState) -> i64 {
+    var frame: u8[>..] = [];
+    frame.append("CONTINUUM / NEXT STEP\n--------------------------------------------------------------------------\n");
+    frame.append(str("Binding   ", d.candidate_id, ":", d.connection.port, "   phase ", d.phase, "\n\n"));
+    frame.append("A factory reset erases the admin credential this binding refers to.\n");
+    frame.append("Re-enrolling discards the stale record and runs the ceremony on the\nsame candidate; Meta setup runs on the existing binding as-is.\n\n");
+    // The renderer pins the last three lines as the footer, so the actions are
+    // exactly the final three lines of this frame.
+    frame.append("[1] Re-enroll this router (factory reset recovery)\n[2] Meta setup on the existing binding\n[Esc] Cancel\n");
+    ct_setup_draw(frame, 0);
+    while true {
+        let choice = ct_tui_key(-1);
+        if choice == '1' || choice == '2' { return choice; }
+        if choice == 27 || choice == 3 || choice < 0 { return 0; }
+    }
+    return 0;
+}
 fn setup_section_name(section: i64) -> const u8[:] {
     if section == 1 { return "NETWORK"; }
     if section == 2 { return "DEVICE"; }
@@ -559,7 +616,7 @@ fn setup_footer(frame: u8[>..]&, section: i64, busy: bool) {
     }
     frame.append("[1-5] sections  [j/k] scroll  [?] help  [q] quit\n");
     if section == 2 {
-        frame.append("[p] Select [i] Inspect [u] Authorize [e] Setup [r] Restore [b] Reboot\n[m] Meta key  [c] Models/budget  [f] Permissions  [t] Talk  [s] Monitor\n");
+        frame.append("[p] Select [i] Inspect [u] Authorize [e] Setup [r] Restore [b] Reboot\n[Enter] Next  [m] Meta key  [c] Models  [f] Permissions  [t] Talk  [s] Monitor\n");
     } else if section == 3 {
         frame.append("[Enter] Read  [x] Disable  [E] Enable  [R] Reconcile (by id)  [1-5] Sections\n[m] Meta key  [c] Models/budget  [f] Permissions  [t] Talk\n");
     } else if section == 4 {
@@ -580,10 +637,17 @@ fn run_setup_tui() -> bool {
     if !settings_ok { notice.append("Saved settings invalid; defaults in use. Press c to repair."); }
     else if key_source == 2 { notice.append("Key loaded from Keychain; provider not tested."); }
     else { notice.append("Discover the environment here; no router details required."); }
-    var network: u8[>..] = [];
-    var observed_wall_ms: i64 = 0;
+    // Read this host once at startup (local interfaces/routes only, no scan and
+    // no provider call) so the Device panel can act on what is actually here
+    // instead of sending the operator to the CLI.
+    var network: u8[>..] = discover_host();
+    var observed_wall_ms: i64 = time_ns() / 1000000;
     var details: u8[>..] = [];
-    var screen: i64 = 0; var scroll: i64 = 0;
+    var startup_device = DeviceState {};
+    let startup_bound = device_saved(setup_directory(), startup_device) && startup_device.candidate_id.len > 0;
+    let startup_ready = startup_device.setup_approved && startup_device.runtime_verified &&
+        startup_device.recovery_verified && startup_device.persistence_verified && startup_device.network_load_verified;
+    var screen: i64 = if startup_bound && startup_ready { 0 } else { 2 }; var scroll: i64 = 0;
     var busy = false; var dirty = true; var verified = false;
     var job: u8[>..] = [];
     while true {
@@ -691,6 +755,54 @@ fn run_setup_tui() -> bool {
                 if setup_program_action(operation, details) { notice.append("Program action completed; inspect the receipt."); }
                 else { notice.append("Program action refused or cancelled; registry unchanged unless receipt says otherwise."); }
                 screen = 3; scroll = 0; dirty = true;
+            } else if screen == 2 && (key == 13 || key == 10) {
+                // Enter advances the lifecycle: bind -> enroll -> setup, and the
+                // reset recovery. Each step keeps its own confirm frame.
+                notice = [];
+                var current = DeviceState {};
+                let unbound = !device_saved(setup_directory(), current) || current.candidate_id.len == 0;
+                if unbound {
+                    let gateway = setup_gateway_candidate(network);
+                    if network.len == 0 { notice.append("No local observation yet; press d to discover this host."); }
+                    else if gateway.len == 0 { notice.append("No single default-route candidate; press p to choose the router."); }
+                    else if !confirm_bind(gateway) { notice.append("Binding cancelled; target unchanged."); }
+                    else if device_select(setup_directory(), network, gateway, "Continuum", 80, false) {
+                        notice.append("Bound. Press Enter again to enroll this router.");
+                    } else { notice.append("Binding refused or the candidate is no longer observed; press d, then p."); }
+                } else if current.phase == "selected" {
+                    job = []; job.append("device-enroll");
+                    if !confirm_device_job(job) { notice.append("Enrollment cancelled; no dispatch."); }
+                    else if ct_setup_job_start(job) == 0 {
+                        busy = true; details = []; details.append("Enrolling the selected unit. q cancels.\n");
+                        notice.append("The ceremony creates the admin credential; no reboot or reset approved.");
+                    } else { notice.append("Could not start enrollment; no dispatch."); }
+                } else if current.phase == "enrolled" {
+                    let choice = setup_next_menu(current);
+                    if choice == '1' {
+                        job = []; job.append("device-enroll");
+                        var stem: u8[..27] = "Continuum";
+                        if current.connection.ssid_stem.len > 0 { stem = current.connection.ssid_stem; }
+                        if !confirm_device_job(job) { notice.append("Re-enrollment cancelled; binding unchanged."); }
+                        else if device_select(setup_directory(), network, current.candidate_id, stem,
+                                current.connection.port, false) {
+                            if ct_setup_job_start(job) == 0 {
+                                busy = true; details = []; details.append("Re-enrolling after a factory reset. q cancels.\n");
+                                notice.append("The stale binding was discarded; the ceremony runs on the same candidate.");
+                            } else { notice.append("Could not start enrollment; no dispatch."); }
+                        } else { notice.append("Candidate no longer observed; press d, then p."); }
+                    } else if choice == '2' {
+                        job = []; job.append("device-setup");
+                        if !meta_credentials_available(cfg) { notice.append("Set MODEL_API_KEY with m first; no device or model dispatch."); }
+                        else if !confirm_device_job(job) { notice.append("Device operation cancelled; no dispatch."); }
+                        else if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; details.append("Meta is choosing work on the selected device. q cancels.\n");
+                            notice.append("Router reboot is NOT approved by this step.");
+                        } else { notice.append("Could not start device operation; no dispatch."); }
+                    } else { notice.append("Next step cancelled; nothing dispatched."); }
+                } else {
+                    notice.append("Enter advances binding, enrollment and setup; use e, b or r in this phase.");
+                }
+                screen = 2; scroll = 0; dirty = true;
             } else if key == 'i' || key == 'u' || key == 'n' || key == 'e' || key == 'r' || key == 'b' {
                 var selected = DeviceState {}; notice = [];
                 if !device_saved(setup_directory(), selected) || selected.candidate_id.len == 0 {

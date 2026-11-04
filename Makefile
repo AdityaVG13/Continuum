@@ -5,7 +5,15 @@ HOST_OS ?= $(shell uname -s)
 export GOOSE_HOME := $(abspath $(BUILD)/goose-cache)
 GOOSE_TESTS := sim_loop sim_controller foundation toolbind metamorphic golden conformance_matrix fuzz_tooljson leap_logic
 
-.PHONY: all check status sim daemon tui owner-check service-check setup-check continuity-check loop loop-router router-cli test web-e2e web-e2e-run meta-live meta-check native-check cpp-status transport-check asus-check host-check leap leap-e2e help clean
+.PHONY: all check status sim daemon tui owner-check service-check setup-check continuity-check loop loop-router router-cli test web-e2e web-e2e-run meta-live meta-check native-check cpp-status transport-check asus-check host-check leap leap-e2e install help clean
+
+# Install the single entry point on PATH. `continuum` with no arguments opens
+# the setup TUI, which discovers this host and walks the device lifecycle.
+PREFIX ?= $(HOME)/.local
+install: $(BUILD)/continuum
+	install -d $(PREFIX)/bin
+	install -m 0755 $(BUILD)/continuum $(PREFIX)/bin/continuum
+	@printf '%s\n' "installed $(PREFIX)/bin/continuum"
 
 all: help
 

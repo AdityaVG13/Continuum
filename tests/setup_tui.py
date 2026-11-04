@@ -226,9 +226,11 @@ env = dict(ENV, TERM="xterm-256color", NO_COLOR="1")
 process = subprocess.Popen([BIN, "--tui"], stdin=slave, stdout=slave, stderr=slave, env=env)
 output = bytearray()
 try:
-    expect("[1] Overview")
+    expect("[3] Device")
+    check(b"DEVICE / LIFECYCLE" in output and b"unselected" in output,
+          "first run lands on the device lifecycle, not a menu, and binds nothing")
     os.write(master, b"2")
-    expect("No host observation yet")
+    expect("NETWORK / LIVE HOST EVIDENCE")
     os.write(master, b"3")
     expect("DEVICE / LIFECYCLE")
     deadline = time.monotonic() + 8
@@ -263,6 +265,7 @@ try:
     expect("Enter/x/E/R")
     os.write(master, b"1")
     expect("NEEDS ATTENTION")
+    expect("FIRST RUN")
     check(b"first run" in output.lower() or b"FIRST RUN" in output,
           "overview states first-run step when no device is selected")
     os.write(master, b"q")
@@ -317,7 +320,7 @@ if fixture.exists():
     output = bytearray()
     try:
         expect("[m] Meta")
-        check(b"not configured" in output, "new sessions show missing credentials, not a false connected state")
+        check(b"not configured" in output.lower(), "new sessions show missing credentials, not a false connected state")
         os.write(master, b"a")
         expect("Set MODEL_API_KEY")
         os.write(master, b"m")

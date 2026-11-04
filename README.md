@@ -186,8 +186,17 @@ and run `bin/continuum` from the unpacked root, or install it under
 
 ### Interactive setup
 
-From the checkout root, run `make tui GOOSE=/absolute/path/to/goose`.
-Once built, `.build/continuum` opens the same TUI without a rebuild.
+Run `make install` once; it puts `continuum` on `PATH` (`~/.local/bin`).
+Then **`continuum` with no arguments is the whole entry point**: it reads this
+host at startup (local interfaces/routes only, no scan and no provider call),
+opens on the Device panel whenever the installation is not yet ready, and
+`[Enter]` walks the lifecycle — bind the one default-route router, enroll a
+factory unit, or recover a stale binding after a factory reset (re-select +
+ceremony). Several default-route candidates are never guessed: that stays an
+explicit `[p]` choice.
+
+From the checkout root, `make tui GOOSE=/absolute/path/to/goose` builds and
+opens the same TUI; `.build/continuum` opens it without a rebuild.
 
 The TUI is organized into five sections: `[1]` Overview, `[2]` Network,
 `[3]` Device, `[4]` Programs, `[5]` Resident, plus `?` help. A pinned strip on
