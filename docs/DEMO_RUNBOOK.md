@@ -72,6 +72,12 @@ These are presentation prompts, not prewritten model output.
 
 ## 6. Screen and event requirements
 
+Bring the unit up with the setup wizard first (`continuum`; keystroke run sheet
+in [LAB.md](LAB.md#physical-lab-run-owner-gated-not-yet-executed)): bind,
+enroll or take over, verify the key, commissioning, reboot, persistence,
+qdisc with readback, upload measurement, qualification, then the resident
+monitor. Once READY, `continuum` opens on the panels.
+
 Use the Continuum TUI's five sections: Overview (needs attention + first-run
 step), Network (live host evidence), Device (gates checklist), Programs
 (guarded registry actions), Resident (live phase/pid/samples/calls). The

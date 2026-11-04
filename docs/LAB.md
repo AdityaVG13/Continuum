@@ -14,7 +14,12 @@ was proven vs. controlled.
   live provider calls.
 - **PTY acceptance**: `tests/setup_tui.py` drives the real `.build/continuum`
   binary's TUI in an isolated home (tmp `XDG_CONFIG_HOME`), with a synthetic
-  env key. No Keychain writes in tests.
+  env key. `tests/commission_cli.py` drives the setup wizard from enroll to
+  READY against the router double and the modeled firmware shell: a refused
+  then accepted key, Meta commissioning (authored transport), a reboot whose
+  answer is lost while the unit goes dark, the persistence check, the qdisc
+  preflight/apply/readback, an upload measurement, qualification and the
+  resident monitor. No Keychain writes in tests.
 
 ## Tested on
 
@@ -41,42 +46,62 @@ was proven vs. controlled.
 
 ## Physical lab run (owner-gated, not yet executed)
 
-Prerequisites: the GT-AX11000 is factory-reset and the Mac is on its LAN. A
-factory unit has **no admin password to enter**: `n` (or
-`continuum --device-step enroll --execute`) generates one, stages it in the OS
-credential vault before any write, submits the vendor first-run form, and proves
-it with a protected read. Nothing about the credential is typed by the owner or
-passed through the model. The commissioning form enables `sshd` itself; do not
-toggle it by hand. The measurement target must be reachable **through the WAN**
-(a host on the Internet or another machine over the Internet), because a
-LAN-only target never crosses the qdisc under test.
+Everything below happens inside `continuum` (the setup wizard). Each step is
+one screen; `[Enter]` opens that step's confirm frame, which states exactly what
+will be written, and a second `[Enter]` dispatches it. `[Esc]` on a confirm
+frame cancels without dispatch; `[Esc]` on the wizard quits; `[a]` opens the
+panels and `[Esc]` there returns. The whole sequence is driven keystroke by
+keystroke against the double in `make device-check` (`tests/commission_cli.py`,
+`WIZARD_LIFECYCLE_GREEN`); it has not yet run on the physical unit.
 
-1. Enroll, then commission: `continuum` opens the TUI; `m` enters the Meta key
-   for the session, `v` verifies it, `d` discovers, `p` selects the unit (choose
-   *new* credentials on a reset unit), `n` enrolls it, `f` grants
-   `runtime`/`verify` first, `e` runs the commissioning dialogue. Commissioning
-   must not reboot the unit.
-2. Preflight (read-only): `continuum --device-step qos-status`.
-   `qdisc_tool_unavailable` means this unit has no `tc` and the demo stops
-   here; `qdisc_root_already_managed` means vendor QoS owns the root and the
-   tool will not stomp it.
-3. Baseline evidence: `continuum --measure <far-host>:<port>/ping /bulk --upload`
-   (>= 20 samples, clean verdict). The upload load is the one a router's egress
-   shaping can influence; a download run is a useful control, not the CAKE claim.
-   The far end must accept `POST /bulk`; a rejected upload is refused as
-   `no_load_observed` rather than counted as load.
-4. Apply: `continuum --device-qos '{"bandwidth_kbps":N,"interface":"eth0","mode":"cake","overhead_bytes":0}' --execute`
-   for a controlled A/B, or `continuum --talk "<owner request>"` to let Meta
-   choose and apply under owner policy. The receipt must show `qos_applied`
-   with `rate_readback:"verified"`.
-5. After evidence: repeat the same `--measure ... --upload` command.
-6. Undo: `continuum --device-qos-restore --execute` (or Meta's
-   `restore_qos`), then `--measure` once more to prove the path returned.
+Before you start:
 
-Abort criteria: any apply receipt without `qos_verified:true`, any restore that
-cannot read the kernel-default root, or a measurement whose verdict is not
-`claimable`. Record every receipt and artifact path; a demo without them is a
-narrative, not a result.
+- The Mac is on the GT-AX11000's LAN **by Ethernet**: a factory enrollment
+  renames the Wi-Fi, so a Wi-Fi link drops mid-step.
+- The terminal is at least 100x40 so the receipt lines below are not clipped.
+- You have the Meta key, your line's upload bandwidth in kbit/s, and a far-end
+  HTTP server **reached through the WAN** that answers `GET` on a probe path
+  and accepts `POST` on an upload path (e.g. `/ping` and `/bulk`). A LAN-only
+  target never crosses the qdisc under test, and only an upload load crosses
+  the shaped egress queue.
+- No factory reset is needed: a configured unit is taken over at step 2.
+
+| Step | Keys | You should see | Stop if |
+| --- | --- | --- | --- |
+| start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` and this host's default-route router | the candidate is not the GT-AX: `a`, `p` chooses another |
+| 1 BIND | `Enter`, `Enter` | `STEP 2 OF 8` (nothing written to the router) | |
+| 2 ENROLL, factory unit | `Enter`, `Enter` | about a minute, then `STEP 3 OF 8`; Wi-Fi renamed to the stem | any other `WHY IT STOPPED` |
+| 2 ENROLL, configured unit | `Enter`, `Enter`, then `p`, admin password, `Enter` | `WHY IT STOPPED ... already set up`, then `Password accepted` and `STEP 3 OF 8`; zero writes | the password is refused twice |
+| 3 KEY | `Enter`, key, `Enter`, `y` or `n` (Keychain), `Enter` | one connection-test call, then `STEP 4 OF 8` and `Key  verified` | refused: `k` enters another key |
+| 4 SETUP | `Enter`, `Enter` | Meta works (bounded calls), then `STEP 5 OF 8` with `RECEIPT    baseline applied; runtime and recovery verified by the router` | `WHY IT STOPPED` (Meta finishing without a verified baseline counts as a failure) |
+| 5 REBOOT | `Enter`, `Enter` | `WAITING FOR THE ROUTER`, `Went down   yes`, then `The router stopped answering and is back` (a few minutes) | `the router has not answered for 10 minutes` |
+| 6 VERIFY | `Enter`, `Enter` | `PERSIST    verified by the router` and `STEP 7 OF 8`; no model call | `reboot_not_observed`: power-cycle the unit, then `Enter` |
+| 7 TUNE, preflight | `Enter`, `Enter` | `PREFLIGHT  tc present; eth0 root queue now: ...`; nothing written | `qdisc_tool_unavailable` (no `tc`: the run ends); `already_managed` (turn off Adaptive QoS / bandwidth limiter, then `Enter`) |
+| 7 TUNE, apply | `Enter`, `Ctrl-U` + upload kbit/s, `Enter`, `Ctrl-U` + `eth0` (`ppp0` on PPPoE), `Enter`, `Enter` | `APPLY SHAPING` names `cake bandwidth <N>kbit overhead 0`; then `QDISC      cake <N> kbit/s on eth0` and `READBACK   verified on the router`, `STEP 8 OF 8` | any receipt without `READBACK   verified`; `readback` refusals roll back: `c`, lower rate |
+| 8 MEASURE | `Enter`, `host:port/ping`, `Enter`, `Ctrl-U` + `/bulk`, `Enter`, `Enter` | `MEASURED   claimable: 20 idle and 20 loaded samples, ... bytes uploaded` and the `EVIDENCE` path | an unclaimable verdict: `c` fixes the target, `Enter` re-runs |
+| 8 QUALIFY | `Enter`, `Enter` | `SETUP COMPLETE` | `evidence_predates_baseline` or any refusal |
+| READY | `Enter`, four prompts (`Enter` keeps each default; answer `0` to automatic Meta assessments unless you want them), `Enter` | `Monitor  monitoring, pid <pid>, <n> samples`, refreshing each second | `Monitor not started` |
+| undo (A/B) | `u`, `Enter` | kernel default queue back; TUNE and MEASURE re-open | a restore without the default root read back |
+| leave | `Esc` | the monitor keeps running; stop it with `kill <pid>` | |
+
+The target and upload path (and the upload rate and WAN interface) are saved
+once in `~/.config/continuum/network.json`; `c` on steps 7 and 8 changes them.
+A control run without shaping is `continuum --measure <host:port/ping> /bulk --upload`
+after the undo.
+
+Record every artifact: `~/.config/continuum/device/state.json`, the
+`device/measure-*.json` evidence the wizard named, `device/recovery-*/qos-last.json`
+and `service/status.json`. Abort criteria: any apply receipt without a verified
+readback, any restore that cannot read the kernel-default root, or a measurement
+whose verdict is not `claimable`. A demo without the receipts is a narrative,
+not a result.
+
+Headless equivalents (debugging only): `continuum --device-step inspect`,
+`--device-step verify --execute`, `--device-step qos-status`,
+`--device-qos '{"bandwidth_kbps":N,"interface":"eth0","mode":"cake","overhead_bytes":0}' --execute`,
+`--device-qos-restore --execute`, `--measure <target> <load-path> --upload`
+(prints `MEASURE_EVIDENCE <path>` before its receipt) and
+`--device-qualify <path> --execute`.
 
 ## What this does not prove
 
