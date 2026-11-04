@@ -5,17 +5,43 @@
 #define CONTINUUM_ASUS_COMMISSION_H
 
 using CommissionSnapshot = std::map<std::string, std::string>;
+// The device layer owns this table. A device that is not one of the built-in
+// models declares its own primitives in a manifest (one feature per line:
+// id class key settable stop start process1 process2). Core, policy and prompts
+// never see these values; they only ever handle the id and the class.
 struct CommissionFeature {
-    const char *id;
-    const char *key, *stop, *start, *process1, *process2;
+    std::string id, cls, key, stop, start, process1, process2;
+    bool settable = true;
 };
-const CommissionFeature kCommissionFeatures[] = {
-    {"samba", "enable_samba", "stop_samba", "restart_samba", "smbd", "nmbd"},
-    {"ftp", "enable_ftp", "stop_ftpd", "restart_ftpd", "vsftpd", ""},
-    {"dlna", "dms_enable", "stop_dms", "restart_dms", "minidlna", ""},
-    {"daap", "daapd_enable", "stop_mt_daapd", "restart_mt_daapd", "mt-daapd", ""},
-    {"webdav", "enable_webdav", "stop_webdav", "restart_webdav", "lighttpd", "webdav_client"},
-};
+const std::vector<CommissionFeature> &commission_features() {
+    static const std::vector<CommissionFeature> builtin = {
+        {"samba", "file_sharing", "enable_samba", "stop_samba", "restart_samba", "smbd", "nmbd"},
+        {"ftp", "file_sharing", "enable_ftp", "stop_ftpd", "restart_ftpd", "vsftpd", ""},
+        {"dlna", "media_server", "dms_enable", "stop_dms", "restart_dms", "minidlna", ""},
+        {"daap", "media_server", "daapd_enable", "stop_mt_daapd", "restart_mt_daapd", "mt-daapd", ""},
+        {"webdav", "file_sharing", "enable_webdav", "stop_webdav", "restart_webdav", "lighttpd", "webdav_client"},
+    };
+    static const std::vector<CommissionFeature> active = [&] {
+        const char *path = std::getenv("CONTINUUM_CAPABILITY_MANIFEST");
+        if (!path || !*path) return builtin;
+        std::ifstream in(path);
+        std::vector<CommissionFeature> loaded;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream row(line);
+            CommissionFeature f;
+            std::string settable;
+            if (!(row >> f.id >> f.cls >> f.key >> settable >> f.stop >> f.start >> f.process1)) return builtin;
+            row >> f.process2;
+            f.settable = settable == "1";
+            loaded.push_back(f);
+        }
+        if (loaded.empty() || loaded.size() > 8) return builtin;
+        return loaded;
+    }();
+    return active;
+}
 const std::vector<std::string> kCommissionKeys = {
     "productid", "firmver", "buildno", "extendno", "lan_hwaddr",
     "x_Setting", "sw_mode", "http_username", "lan_ipaddr", "lan_netmask",
@@ -48,43 +74,27 @@ std::string commission_identity(const CommissionSnapshot &values) {
 // The device adapter owns the only mapping from its own primitives to the
 // product's capability classes. Core, policy and prompts never see these keys.
 std::string commission_capabilities(const CommissionSnapshot &values) {
-    struct Row {
-        const char *id;
-        const char *cls;
-        const char *key;
-        bool settable;
-        bool boolean;
-    };
-    static const Row rows[] = {
-        {"samba", "file_sharing", "enable_samba", true, true},
-        {"ftp", "file_sharing", "enable_ftp", true, true},
-        {"webdav", "file_sharing", "enable_webdav", true, true},
-        {"dlna", "media_server", "dms_enable", true, true},
-        {"daap", "media_server", "daapd_enable", true, true},
-        {"vendor_qos", "traffic_control", "qos_enable", false, true},
-        {"ssh", "remote_access", "sshd_enable", false, true},
-        {"vendor_firmware", "update_channel", "firmver", false, false},
-    };
     std::string out = "[";
-    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
-        auto it = values.find(rows[i].key);
+    bool first = true;
+    auto emit = [&](const std::string &id, const std::string &cls, const std::string &key,
+                    bool settable, bool boolean) {
+        auto it = values.find(key);
         std::string state = "unknown";
         if (it != values.end() && !it->second.empty()) {
-            if (!rows[i].boolean) state = "present";
+            if (!boolean) state = "present";
             else if (it->second == "0") state = "disabled";
             else state = "enabled";
         }
-        if (i) out += ",";
-        out += "{\"id\":\"";
-        out += rows[i].id;
-        out += "\",\"class\":\"";
-        out += rows[i].cls;
-        out += "\",\"state\":\"";
-        out += state;
-        out += "\",\"settable\":";
-        out += rows[i].settable ? "true" : "false";
+        if (!first) out += ",";
+        first = false;
+        out += "{\"id\":\"" + id + "\",\"class\":\"" + cls + "\",\"state\":\"" + state + "\",\"settable\":";
+        out += settable ? "true" : "false";
         out += ",\"evidence\":\"device_reported\"}";
-    }
+    };
+    for (const auto &f : commission_features()) emit(f.id, f.cls, f.key, f.settable, true);
+    emit("vendor_qos", "traffic_control", "qos_enable", false, true);
+    emit("ssh", "remote_access", "sshd_enable", false, true);
+    emit("vendor_firmware", "update_channel", "firmver", false, false);
     return out + "]";
 }
 
@@ -345,8 +355,8 @@ std::string commission_boot_id(const std::string &data) {
     return value;
 }
 
-bool commission_process_present(const std::string &data, const char *name) {
-    return *name && data.find("," + std::string(name) + ",") != std::string::npos;
+bool commission_process_present(const std::string &data, const std::string &name) {
+    return !name.empty() && data.find("," + name + ",") != std::string::npos;
 }
 
 // --- qdisc profile boundary -------------------------------------------------
@@ -478,7 +488,7 @@ std::string commission_trial_program(const std::string &lease,
         std::to_string(seconds) + " ]; do\n IFS= read -r ct_state < " + lease +
         "/lease\n [ \"$ct_state\" = confirmed ] && exit 0\n [ \"$ct_state\" = rollback ] && break\n sleep 1\n ct_n=$((ct_n+1))\ndone\n";
     for (size_t i : selected) {
-        const auto &f = kCommissionFeatures[i];
+        const auto &f = commission_features()[i];
         // Refuse to overwrite an intervening owner's nonzero choice.
         restore += "ct_v=$(nvram get " + std::string(f.key) + ")\n";
         restore += "if [ \"$ct_v\" = 0 ]; then nvram set " + std::string(f.key) + "=" +
@@ -496,7 +506,7 @@ std::string commission_trial_program(const std::string &lease,
     // Roll back on this command's own failure as well as controller loss. The
     // worker remains pending until a separate verified commit request.
     for (size_t i : selected) {
-        const auto &f = kCommissionFeatures[i];
+        const auto &f = commission_features()[i];
         program += "[ \"$(nvram get " + std::string(f.key) + ")\" = " +
             before.at(f.key) + " ]\nnvram set " + f.key + "=0\nservice " + f.stop + "\n";
     }
@@ -534,7 +544,7 @@ bool commission_profile_matches(const CommissionSnapshot &now, const CommissionS
                                 const std::vector<size_t> &selected, bool restored) {
     if (!commission_same_core(now, before)) return false;
     for (size_t i : selected) {
-        const auto &key = kCommissionFeatures[i].key;
+        const auto &key = commission_features()[i].key;
         if (now.at(key) != (restored ? before.at(key) : "0")) return false;
     }
     return true;
@@ -598,12 +608,12 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
                 return commission_fail(out, out_len, "baseline_schema_invalid");
         if (!commission_same_core(current, before))
             return commission_fail(out, out_len, "core_or_device_changed_since_backup");
-        for (size_t i = 0; i < sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]); ++i) {
+        for (size_t i = 0; i < commission_features().size(); ++i) {
             bool owned = false;
-            if (!json_bool(saved, ("owns_" + std::string(kCommissionFeatures[i].key)).c_str(), owned))
+            if (!json_bool(saved, ("owns_" + std::string(commission_features()[i].key)).c_str(), owned))
                 return commission_fail(out, out_len, "baseline_ownership_missing");
             if (!owned) continue;
-            const auto &key = kCommissionFeatures[i].key;
+            const auto &key = commission_features()[i].key;
             if (!commission_small_setting(before[key]) ||
                 (current[key] != "0" && current[key] != before[key]))
                 return commission_fail(out, out_len, "service_changed_by_another_owner");
@@ -618,12 +628,12 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             size_t comma = disable.find(',', cursor);
             std::string id = disable.substr(cursor, comma == std::string::npos ? std::string::npos : comma - cursor);
             if (id.empty() || id.size() > 32) return CT_INVALID_ARGUMENT;
-            size_t index = sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]);
+            size_t index = commission_features().size();
             for (size_t i = 0; i < index; ++i)
-                if (id == kCommissionFeatures[i].id) index = i;
-            if (index == sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]))
+                if (id == commission_features()[i].id) index = i;
+            if (index == commission_features().size())
                 return commission_fail(out, out_len, "capability_unknown");
-            const auto &key = kCommissionFeatures[index].key;
+            const auto &key = commission_features()[index].key;
             if (current[key].empty()) { cursor = comma == std::string::npos ? disable.size() + 1 : comma + 1; continue; }
             if (!commission_small_setting(current[key]))
                 return commission_fail(out, out_len, "unsupported_optional_service_value");
@@ -637,10 +647,10 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         saved.pop_back();
         saved += ",\"target_host\":\"" + s.ref.host + "\",\"target_port\":" +
             std::to_string(s.ref.port) + ",\"admin_ref\":\"" + ref + "\"";
-        for (size_t i = 0; i < sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]); ++i) {
+        for (size_t i = 0; i < commission_features().size(); ++i) {
             bool owns = false;
             for (size_t j : selected) if (i == j) owns = true;
-            saved += ",\"owns_" + std::string(kCommissionFeatures[i].key) + "\":" + (owns ? "true" : "false");
+            saved += ",\"owns_" + std::string(commission_features()[i].key) + "\":" + (owns ? "true" : "false");
         }
         saved += "}";
         if (!commission_save(directory + "/baseline.json", saved))
@@ -663,9 +673,9 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     if (qualification) {
         if (!commission_profile_matches(current, before, selected, false))
             return commission_fail(out, out_len, "applied_baseline_changed");
-        for (const auto &feature : kCommissionFeatures) {
+        for (const auto &feature : commission_features()) {
             bool owned = false;
-            for (size_t i : selected) if (feature.key == kCommissionFeatures[i].key) owned = true;
+            for (size_t i : selected) if (feature.key == commission_features()[i].key) owned = true;
             if (current[feature.key] != (owned ? "0" : before[feature.key]))
                 return commission_fail(out, out_len, "applied_service_profile_changed");
         }
@@ -863,7 +873,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         CommissionSnapshot now;
         if (!commission_snapshot(s, now) || !commission_same_core(now, current))
             return fail("runtime_inspection_core_changed");
-        for (const auto &feature : kCommissionFeatures)
+        for (const auto &feature : commission_features())
             if (now[feature.key] != current[feature.key])
                 return fail("runtime_inspection_service_changed");
         bootstrap.done(true);
@@ -872,7 +882,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             std::string boot = commission_boot_id(runtime_before);
             if (boot.empty() || boot == applied_boot)
                 return commission_fail(out, out_len, "reboot_not_observed");
-            for (const auto &feature : kCommissionFeatures)
+            for (const auto &feature : commission_features())
                 if (now[feature.key] == "0" &&
                     (commission_process_present(runtime_before, feature.process1) ||
                      commission_process_present(runtime_before, feature.process2)))
@@ -890,7 +900,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     if (action == "restore") {
         std::string program = "set -eu\n";
         for (size_t i : selected) {
-            const auto &f = kCommissionFeatures[i];
+            const auto &f = commission_features()[i];
             program += "nvram set " + std::string(f.key) + "=" + before[f.key] +
                 "\nservice " + (before[f.key] == "0" ? f.stop : f.start) + "\n";
         }
@@ -909,7 +919,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         return commission_emit(out, out_len, receipt);
     }
     for (size_t i : requested) {
-        const auto &f = kCommissionFeatures[i];
+        const auto &f = commission_features()[i];
         if (before[f.key] == "0" && (commission_process_present(runtime_before, f.process1) ||
             commission_process_present(runtime_before, f.process2))) return fail("unqualified_orphaned_service_process");
     }
@@ -940,7 +950,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     if (!ct_commission_ssh(connection, commission_runtime_program(), after_drill, 20) ||
         !commission_runtime_valid(after_drill)) return fail("runtime_after_recovery_drill_failed");
     for (size_t i : drill) {
-        const auto &f = kCommissionFeatures[i];
+        const auto &f = commission_features()[i];
         if ((commission_process_present(runtime_before, f.process1) && !commission_process_present(after_drill, f.process1)) ||
             (commission_process_present(runtime_before, f.process2) && !commission_process_present(after_drill, f.process2)))
             return fail("device_trial_did_not_restore_service_runtime");
@@ -956,7 +966,7 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             !commission_runtime_valid(runtime_after)) continue;
         bool clean = true;
         for (size_t i : requested) {
-            const auto &f = kCommissionFeatures[i];
+            const auto &f = commission_features()[i];
             if (commission_process_present(runtime_after, f.process1) || commission_process_present(runtime_after, f.process2))
                 clean = false;
         }

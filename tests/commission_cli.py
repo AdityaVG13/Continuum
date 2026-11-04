@@ -222,6 +222,21 @@ def main():
         assert read_device() == before, "inspection must not change settings"
         assert PASSWORD not in result.stdout + result.stderr
         transcript.append({"assertions": "protected inventory; no mutation; no false readiness"})
+        # A device that declares its own vocabulary gets the same lifecycle: the
+        # manifest replaces the built-in table, so the graph must rename ids.
+        manifest = directory / "declared.manifest"
+        manifest.write_text(
+            "smb file_sharing enable_samba 1 stop_samba restart_samba smbd nmbd\n"
+            "ftpd file_sharing enable_ftp 1 stop_ftpd restart_ftpd vsftpd\n")
+        declared = subprocess.run([binary], env=dict(env, COMMISSION_ACTION="capabilities",
+                                                     CONTINUUM_CAPABILITY_MANIFEST=str(manifest)),
+                                  text=True, capture_output=True, timeout=15)
+        assert declared.returncode == 0 and '"smb"' in declared.stdout and '"samba"' not in declared.stdout, \
+            "a declared manifest must replace the built-in capability vocabulary: " + declared.stdout
+        without = subprocess.run([binary], env=dict(env, COMMISSION_ACTION="capabilities"),
+                                 text=True, capture_output=True, timeout=15)
+        assert '"samba"' in without.stdout and '"smb"' not in without.stdout, \
+            "the built-in table must remain the default when no manifest is declared"
         print("COMMISSION_INSPECT_GREEN", directory)
 
         # One product executable must carry an owner-selected, observed target

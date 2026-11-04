@@ -40,6 +40,8 @@
 #include <cerrno>
 #include <cctype>
 #include <map>
+#include <fstream>
+#include <sstream>
 #include <chrono>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
