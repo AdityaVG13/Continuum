@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Continuum — film</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="stage-wrap">
+      <div id="stage">
+        <canvas id="c"></canvas>
+        <div id="titles">
+          <div>
+            <h1>Continuum</h1>
+            <p>A cage for an agent that has to touch a router</p>
+          </div>
+        </div>
+        <div id="tui-shell">
+          <div class="bezel">
+            <div class="bezel-inner">
+              <div class="tui-bar"><i></i> continuum · live tui</div>
+              <pre id="tui"></pre>
+            </div>
+          </div>
+        </div>
+        <div id="counter">Meta calls this hour &nbsp;<b id="call-n">0</b></div>
+        <div id="super"></div>
+        <div id="endcard">
+          <div>
+            <h1>Continuum</h1>
+            <p>Indie · Push the Frontier</p>
+            <p class="url">github.com/AdityaVG13/Continuum</p>
+          </div>
+        </div>
+        <div id="grain"></div>
+      </div>
+    </div>
+    <aside id="desk">
+      <div id="clock">00:00.0</div>
+      <div id="scene-name">title</div>
+      <div id="prompter"></div>
+      <div id="controls">
+        <button type="button" id="btn-play">Play</button>
+        <button type="button" id="btn-rec">Record</button>
+        <button type="button" id="btn-restart">Restart</button>
+      </div>
+      <p id="help">Space play · R record · 1–8 scenes · arrows 5s<br>Screen-record the stage only. Voice is separate.</p>
+    </aside>
+  </div>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
