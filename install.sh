@@ -21,7 +21,9 @@ if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
     exit 1
 fi
 
-if [ "$VERSION" = "latest" ]; then
+if [ -n "${CONTINUUM_BASE_URL:-}" ]; then
+    BASE="$CONTINUUM_BASE_URL"
+elif [ "$VERSION" = "latest" ]; then
     BASE="https://github.com/$REPO/releases/latest/download"
 else
     BASE="https://github.com/$REPO/releases/download/$VERSION"

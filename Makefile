@@ -31,7 +31,7 @@ dist: $(BUILD)/continuum
 	$(MAKE) --no-print-directory install PREFIX=$(abspath $(DIST))/continuum-macos-arm64
 	/usr/bin/codesign --force --sign "$(MACOS_SIGN_IDENTITY)" --identifier org.continuum.controller --timestamp=none $(DIST)/continuum-macos-arm64/bin/continuum
 	/usr/bin/codesign --verify --strict $(DIST)/continuum-macos-arm64/bin/continuum
-	tar -C $(DIST) -czf $(DIST)/continuum-macos-arm64.tar.gz continuum-macos-arm64
+	COPYFILE_DISABLE=1 tar -C $(DIST) -czf $(DIST)/continuum-macos-arm64.tar.gz continuum-macos-arm64
 	install -m 0755 install.sh $(DIST)/install.sh
 	cd $(DIST) && shasum -a 256 continuum-macos-arm64.tar.gz install.sh > SHA256SUMS.txt
 	@printf '%s\n' "release assets in $(DIST): continuum-macos-arm64.tar.gz install.sh SHA256SUMS.txt"
