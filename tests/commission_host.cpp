@@ -56,6 +56,10 @@ bool ct_commission_ssh(const ct_commission_connection &,
     }
     int status = pclose(pipe);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return false;
+    // A real router drops the session as it goes down: the reboot program ran,
+    // but its answer is lost and the caller sees a transport failure.
+    const char *drop = std::getenv("CT_COMMISSION_SSH_DROP_REBOOT");
+    if (drop && std::string(drop) == "1" && script.find(root + "/bin/reboot") != std::string::npos) return false;
     const std::string begin = "CT_DATA_BEGIN\n";
     size_t first = data.find(begin);
     if (first == std::string::npos) return false;

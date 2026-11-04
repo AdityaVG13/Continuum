@@ -54,6 +54,10 @@ def device_command():
     if name == "reboot" and not args:
         assert (root / "committed").is_file(), "reboot must follow durable settings"
         (root / "proc/sys/kernel/random/boot_id").write_text("commission-test-" + uuid.uuid4().hex + "\n")
+        outage = os.environ.get("CT_COMMISSION_DEVICE_OUTAGE_MS")
+        if outage and os.environ.get("ROUTER_OUTAGE_FILE"):
+            # The unit goes dark while it restarts, then answers again.
+            Path(os.environ["ROUTER_OUTAGE_FILE"]).write_text(str(int(time.time() * 1000) + int(outage)))
     elif name == "nohup":
         # The stock image need not provide this optional userspace applet.
         raise SystemExit(127)
@@ -137,7 +141,9 @@ def main():
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    server_env = dict(os.environ, ROUTER_PASSWORD="test-only-pw", ROUTER_WIZARD="1")
+    outage_file = directory / "router-outage"
+    server_env = dict(os.environ, ROUTER_PASSWORD="test-only-pw", ROUTER_WIZARD="1",
+                      ROUTER_OUTAGE_FILE=str(outage_file))
     log = (directory / "router.log").open("w")
     server = subprocess.Popen([double, str(port)], env=server_env, stdout=log, stderr=log)
     token = ""
@@ -870,6 +876,8 @@ def main():
             assert PASSWORD not in json.dumps(pending) + json.dumps(service_state) + setup.stdout
             transcript.append({"action": "integrated_handoff", "device": pending, "service": service_state,
                                "identity_mismatch": mismatched["device"], "boundary": "authored_device_os_and_model_transport"})
+            drive_wizard(unified, integrated_env, directory, port, device, outage_file)
+            print("WIZARD_LIFECYCLE_GREEN", directory)
             print("DEVICE_LIFECYCLE_ALL_GREEN", directory)
     finally:
         (directory / "transcript.json").write_text(json.dumps(transcript, indent=2) + "\n")
@@ -877,6 +885,215 @@ def main():
         server.wait(timeout=5)
         log.close()
         print("COMMISSION_TEST_SHA256", hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+
+
+def drive_wizard(unified, base_env, directory, port, device, outage_file):
+    """The first-run wizard walks the whole lifecycle through the real TUI.
+
+    Every step is a keystroke on a PTY; every claim is checked against the
+    durable device record or the modeled device, never against screen text
+    alone. The reboot drops its SSH answer and the unit goes dark for a few
+    seconds, the way a physical router does.
+    """
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    import threading
+    from http.server import ThreadingHTTPServer
+    sys.dont_write_bytecode = True  # importing the sibling test leaves no cache in tests/
+    from measure_cli import Handler
+
+    home = directory / "wizard"
+    config = home / "config/continuum"
+    config.mkdir(parents=True, mode=0o700)
+    state_path = config / "device/state.json"
+    (config / "settings.json").write_text(json.dumps(dict(controller_model="fixture-controller",
+        task_model="fixture-workload", max_output_tokens=512, max_tool_rounds=8, request_timeout_ms=3000)))
+    (device / "qdisc-eth0").write_text("qdisc pfifo_fast 0: root refcnt 2 bands 3\n")
+    env = dict(base_env, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color",
+               NO_COLOR="1", CONTINUUM_AGENT_FIXTURE="commission", ROUTER_OUTAGE_FILE=str(outage_file),
+               CT_COMMISSION_DEVICE_OUTAGE_MS="5000", CT_COMMISSION_SSH_DROP_REBOOT="1")
+    env.pop("MODEL_API_KEY", None)
+    chosen = subprocess.run([unified, "--device-select", "lo0:127.0.0.1", "ExistingNetwork", str(port),
+                             "--existing-credentials"], env=env, capture_output=True, text=True, timeout=10)
+    assert chosen.returncode == 0, chosen.stdout + chosen.stderr
+    connection = json.loads(chosen.stdout.splitlines()[-1])["connection"]
+    for ref, secret in ((connection["admin_ref"], PASSWORD), (connection["psk_ref"], "FixtureWifi12345")):
+        env["CONTINUUM_SECRET_" + "".join(c.upper() if c.isalnum() else "_" for c in ref)] = secret
+
+    target_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    target_server.daemon_threads = True
+    threading.Thread(target=target_server.serve_forever, daemon=True).start()
+    target = "127.0.0.1:%d/ping" % target_server.server_address[1]
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    process = subprocess.Popen([unified, "--tui"], stdin=slave, stdout=slave, stderr=slave, env=env)
+    output = bytearray()
+    monitor = None
+    cursor = [0]
+
+    def drain():
+        while select.select([master], [], [], 0.05)[0]:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            output.extend(chunk)
+
+    def expect(text, timeout=30):
+        # Ordered matching: a string counts only after the previous match and
+        # after the last keystroke, so a frame drawn earlier never satisfies it.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            at = output.find(text.encode(), cursor[0])
+            if at >= 0:
+                cursor[0] = at + len(text)
+                return
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+        tail = output[-3000:].decode(errors="replace")
+        raise AssertionError("wizard did not reach " + repr(text) + "\n" + tail)
+
+    def press(keys):
+        drain()
+        cursor[0] = len(output)
+        os.write(master, keys)
+
+    def state():
+        return json.loads(state_path.read_text())
+
+    try:
+        expect("STEP 2 OF 8")
+        press(b"\r")
+        expect("Run the factory enrollment")
+        press(b"\r")
+        expect("STEP 3 OF 8", 60)
+        # A key the provider refuses must stop at the key step, in words.
+        press(b"\r")
+        expect("MODEL_API_KEY")
+        press(b"synthetic-rejected-key\r")
+        if sys.platform == "darwin":
+            expect("Save in Keychain?")
+        press(b"n")
+        expect("One connection-test call")
+        press(b"\r")
+        expect("[Enter] Test again    [k] New key", 30)
+        refused = output[output.rfind(b"STEP 3 OF 8"):]
+        assert b"WHY IT STOPPED" in refused and b"Key  unverified" in refused, "a refused key stays on the key step"
+        press(b"k")
+        expect("MODEL_API_KEY")
+        press(b"synthetic-good-key\r")
+        if sys.platform == "darwin":
+            expect("Save in Keychain?")
+        press(b"n")
+        expect("Confirm Meta job")
+        press(b"\r")
+        expect("STEP 4 OF 8", 30)
+        press(b"\r")
+        expect("Grant Meta standing permission")
+        press(b"\r")
+        expect("STEP 5 OF 8", 180)
+        commissioned = state()
+        assert commissioned["phase"] == "baseline_applied" and commissioned["runtime_verified"], commissioned
+        boot_before = (device / "proc/sys/kernel/random/boot_id").read_text()
+        press(b"\r")
+        expect("Approve ONE router/device reboot")
+        press(b"\r")
+        # The SSH answer is lost and the unit goes dark: the wizard must wait
+        # for "stopped answering, answered again", not trust the exit code.
+        expect("stopped answering and is back", 120)
+        assert (device / "proc/sys/kernel/random/boot_id").read_text() != boot_before
+        assert state()["phase"] == "reboot_pending"
+        press(b"\r")
+        expect("Verify that the baseline survived")
+        expect("No model call")
+        press(b"\r")
+        expect("STEP 7 OF 8", 120)
+        proved = state()
+        assert proved["persistence_verified"] and proved["phase"] == "network_qualification_required", proved
+        press(b"\r")
+        expect("Read the WAN queue")
+        press(b"\r")
+        expect("PREFLIGHT", 90)
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), "the preflight writes nothing"
+        press(b"\r")
+        expect("Upload bandwidth")
+        press(b"\x1590000\r")
+        expect("WAN interface")
+        press(b"\x15eth0\r")
+        expect("Write ONE root qdisc")
+        expect("cake bandwidth 90000kbit overhead 0")
+        press(b"\r")
+        expect("READBACK   verified", 120)
+        assert b"STEP 8 OF 8" in output[output.rfind(b"READBACK") - 3000:], "a verified qdisc advances to MEASURE"
+        qdisc = (device / "qdisc-eth0").read_text()
+        assert "cake" in qdisc and "bandwidth 90Mbit" in qdisc, qdisc
+        press(b"\r")
+        expect("Measurement target")
+        press(b"\x15" + target.encode() + b"\r")
+        expect("Upload path")
+        press(b"\x15/bulk\r")
+        expect("Run one upload measurement")
+        press(b"\r")
+        expect("MEASURED   claimable", 180)
+        saved = json.loads((config / "network.json").read_text())
+        assert saved["target"] == target and saved["load_path"] == "/bulk" and saved["upload_kbps"] == 90000, saved
+        press(b"\r")
+        expect("Record this measurement")
+        press(b"\r")
+        expect("SETUP COMPLETE", 60)
+        ready = state()
+        assert ready["network_load_verified"] and ready["ready"], ready
+        press(b"\r")
+        for label, value in (("Monitor interval", "1000"), ("Incident cooldown", "60000"),
+                             ("Meta calls per hour", "1"), ("Automatic Meta assessments", "0")):
+            expect(label)
+            press(b"\x15" + value.encode() + b"\r")
+        expect("Start background monitor?")
+        press(b"\r")
+        expect("Monitor  monitoring", 30)
+        monitor = json.loads((config / "service/status.json").read_text())
+        assert monitor["phase"] == "monitoring", monitor
+        expect("pid %d" % monitor["pid"], 10)
+        identity = subprocess.run(["ps", "-p", str(monitor["pid"]), "-o", "args="],
+                                  capture_output=True, text=True).stdout
+        assert unified + " --serve" in identity, identity
+        press(b"\x1b")
+        deadline = time.monotonic() + 5
+        while process.poll() is None and time.monotonic() < deadline:
+            ready_fds, _, _ = select.select([master], [], [], 0.05)
+            if ready_fds:
+                output.extend(os.read(master, 65536))
+        assert process.wait(timeout=1) == 0
+        assert PASSWORD.encode() not in output and b"synthetic-good-key" not in output
+        (directory / "wizard.ansi").write_bytes(output)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        if monitor is not None:
+            try:
+                os.kill(monitor["pid"], 15)
+            except ProcessLookupError:
+                pass
+        target_server.shutdown()
+        os.close(master)
+        os.close(slave)
 
 
 if __name__ == "__main__":

@@ -363,10 +363,31 @@ int32_t ct_tui_job_start(ct_bytes mode) {
     std::string task(reinterpret_cast<const char *>(mode.data), static_cast<size_t>(mode.len));
     const bool device = task == "device-inspect" || task == "device-authorize" ||
                         task == "device-enroll" || task == "device-setup" ||
-                        task == "device-restore" || task == "device-reboot";
-    const bool talk = task.size() > 5 && task.compare(0, 5, "talk:") == 0;
+                        task == "device-restore" || task == "device-reboot" ||
+                        task == "device-verify" || task == "device-qos-status";
+    auto prefixed = [&](const char *prefix) {
+        const size_t n = std::strlen(prefix);
+        return task.size() > n && task.compare(0, n, prefix) == 0;
+    };
+    const bool talk = prefixed("talk:");
+    // Owner-confirmed wizard jobs carry exactly one operand (two for measure,
+    // split on the single newline). Each maps to one fixed CLI flag set, and
+    // every effect still passes --execute only because the owner confirmed it.
+    const bool qos = prefixed("qos:");
+    const bool qos_restore = task == "qos-restore";
+    const bool qualify = prefixed("qualify:");
+    const bool measure = prefixed("measure:");
+    std::string target, load;
+    if (measure) {
+        const size_t split = task.find('\n', 8);
+        if (split == std::string::npos || split == 8 || split + 1 >= task.size() ||
+            task.find('\n', split + 1) != std::string::npos) return CT_REJECTED;
+        target = task.substr(8, split - 8);
+        load = task.substr(split + 1);
+    } else if (task.find('\n') != std::string::npos) return CT_REJECTED;
     const char *arg = talk ? "--talk" : device ? "--device-step" : task == "discover" ? "--discover" : task == "agent" ? "--discover-model" :
-                      task == "test-key" ? "--test-meta" : task == "lab" ? "--loop" : nullptr;
+                      task == "test-key" ? "--test-meta" : task == "lab" ? "--loop" : qos ? "--device-qos" :
+                      qos_restore ? "--device-qos-restore" : qualify ? "--device-qualify" : measure ? "--measure" : nullptr;
     if (!arg) return CT_REJECTED;
     auto path = executable();
     int fds[2];
@@ -386,10 +407,14 @@ int32_t ct_tui_job_start(ct_bytes mode) {
         if (device) {
             const char *step = task.c_str() + 7;
             if (task == "device-setup" || task == "device-restore" || task == "device-reboot" ||
-                task == "device-enroll")
+                task == "device-enroll" || task == "device-verify")
                 execl(path.c_str(), path.c_str(), arg, step, "--execute", static_cast<char *>(nullptr));
             else execl(path.c_str(), path.c_str(), arg, step, static_cast<char *>(nullptr));
         } else if (talk) execl(path.c_str(), path.c_str(), arg, task.c_str() + 5, static_cast<char *>(nullptr));
+        else if (qos) execl(path.c_str(), path.c_str(), arg, task.c_str() + 4, "--execute", static_cast<char *>(nullptr));
+        else if (qos_restore) execl(path.c_str(), path.c_str(), arg, "--execute", static_cast<char *>(nullptr));
+        else if (qualify) execl(path.c_str(), path.c_str(), arg, task.c_str() + 8, "--execute", static_cast<char *>(nullptr));
+        else if (measure) execl(path.c_str(), path.c_str(), arg, target.c_str(), load.c_str(), "--upload", static_cast<char *>(nullptr));
         else execl(path.c_str(), path.c_str(), arg, static_cast<char *>(nullptr));
         _exit(127);
     }

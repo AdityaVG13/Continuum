@@ -30,6 +30,18 @@ int32_t ct_meta_submit(ct_handle, ct_bytes request, uint64_t *out) {
     if (expected && body.find("\"model\":" + quote(expected)) == std::string::npos)
         return fail("worker model differs from the TUI settings");
     std::string output;
+    if (body.find("Connection test only.") != std::string::npos) {
+        // The wizard's key check. A key the provider refuses answers 401, the
+        // way a revoked or mistyped key does; any other key is accepted.
+        const char *key = std::getenv("MODEL_API_KEY");
+        if (key && std::strstr(key, "rejected"))
+            pending = "{\"status\":401,\"body\":{\"error\":{\"message\":\"invalid api key\"}}}";
+        else
+            pending = "{\"status\":200,\"body\":{\"id\":\"fixture-key\",\"model\":\"fixture-meta\",\"output\":["
+                "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Continuum Meta connection verified.\"}]}]}}";
+        *out = 1;
+        return CT_OK;
+    }
     if (body.find("device_agent") != std::string::npos) {
         const char *scenario = std::getenv("CONTINUUM_AGENT_FIXTURE");
         if (!scenario) return fail("unexpected device-agent request");

@@ -24,6 +24,7 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -810,8 +811,24 @@ void handle(int fd, const Request &rq) {
 
 }  // namespace
 
+// A rebooting unit stops answering for a while. ROUTER_OUTAGE_FILE holds a
+// wall-clock deadline in ms (written by the modeled reboot); until it passes,
+// every connection is closed unanswered.
+bool offline(const char *path) {
+    if (!path || !*path) return false;
+    FILE *f = std::fopen(path, "r");
+    if (!f) return false;
+    long long deadline = 0;
+    const bool read = std::fscanf(f, "%lld", &deadline) == 1;
+    std::fclose(f);
+    const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return read && now < deadline;
+}
+
 int main(int argc, char **argv) {
     int port = argc > 1 ? std::atoi(argv[1]) : 18080;
+    const char *outage = std::getenv("ROUTER_OUTAGE_FILE");
     const char *pw = std::getenv("ROUTER_PASSWORD");
     if (!pw || !*pw) {
         std::printf("ROUTER_PASSWORD is empty: refusing to serve\n");
@@ -860,6 +877,7 @@ int main(int argc, char **argv) {
     for (;;) {
         int fd = accept(srv, nullptr, nullptr);
         if (fd < 0) continue;
+        if (offline(outage)) { close(fd); continue; }
         timeval tv{};
         tv.tv_sec = 10;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);

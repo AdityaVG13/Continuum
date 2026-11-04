@@ -374,6 +374,12 @@ fn confirm_device_job(job: const u8[:]) -> bool {
         frame.append("\nApprove ONE router/device reboot NOW for this selected device?\nThis interrupts the network and ongoing work. No schedule is created.\nStanding setup permission and Meta messages cannot approve this operation.\nA failed/uncertain request is verified, never automatically repeated.\n");
     } else if job == "device-restore" {
         frame.append("\nRestore only the selected device's owned sharing-service baseline?\nA different device, changed firmware or intervening owner setting is refused.\n");
+    } else if job == "device-verify" {
+        frame.append("\nVerify that the baseline survived the reboot?\nContinuum reads the router again and requires a new boot identity and\nevery owned setting still in force. No model call; no owned setting is\nwritten. A pass records the PERSIST gate; a failure names what did not\nsurvive.\n");
+    } else if job == "device-qos-status" {
+        frame.append("\nRead the WAN queue (read-only preflight)?\nChecks that the router has tc and reads its current root qdisc.\nNothing is written to the router. No model call.\n");
+    } else if job == "qos-restore" {
+        frame.append("\nRemove the shaping and restore the kernel default queue?\nDeletes only the root qdisc Continuum applied, then reads the default\nback. The LOAD gate re-opens: READY ends until you tune and measure\nagain. No model call.\n");
     } else {
         frame.append("\nAuthorize this signed application to read the selected credential?\nThe OS may request your authorization. No credential is displayed.\n");
     }
@@ -458,18 +464,176 @@ fn setup_contains(hay: const u8[:], needle: const u8[:]) -> bool {
     return false;
 }
 
+// Owner inputs for TUNE and MEASURE. Non-secret, asked once and kept beside
+// settings.json; unknown fields fail closed like every other settings file.
+struct WizardNetwork {
+    target: u8[..128] = "",
+    load_path: u8[..128] = "",
+    upload_kbps: i64 = 0,
+    interface_id: u8[..8] = "eth0",
+}
+fn wizard_network_valid(net: WizardNetwork) -> bool {
+    if net.interface_id != "eth0" && net.interface_id != "ppp0" { return false; }
+    // The adapter's own profile bounds; 0 means "not chosen yet".
+    if net.upload_kbps != 0 && (net.upload_kbps < 256 || net.upload_kbps > 100000) { return false; }
+    if net.load_path.len > 0 && net.load_path[0] != '/' { return false; }
+    for b in net.target { if b <= 32 || b >= 127 { return false; } }
+    for b in net.load_path { if b <= 32 || b >= 127 { return false; } }
+    return true;
+}
+fn load_wizard_network(net: WizardNetwork&) -> bool {
+    net = WizardNetwork {};
+    let path = str(setup_directory(), "/network.json");
+    if !file_exists(path) { return true; }
+    var text: u8[>..] = [];
+    if !read_file(path, text) || text.len > 4096 { return false; }
+    var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+    let root, err = json::parse(text, doc, decoded);
+    let known: const u8[:][..4] = ["target", "load_path", "upload_kbps", "interface"];
+    if !root || !no_unknown(root, known) { return false; }
+    let target, t = json::as_string(json::member(root, "target"));
+    let load, l = json::as_string(json::member(root, "load_path"));
+    let kbps, k = json::as_i64(json::member(root, "upload_kbps"));
+    let iface, i = json::as_string(json::member(root, "interface"));
+    if !t || !l || !k || !i || target.len > 128 || load.len > 128 || iface.len > 8 { return false; }
+    var candidate = WizardNetwork {};
+    candidate.target = target; candidate.load_path = load; candidate.upload_kbps = kbps; candidate.interface_id = iface;
+    if !wizard_network_valid(candidate) { return false; }
+    net = candidate; return true;
+}
+fn save_wizard_network(net: WizardNetwork) -> bool {
+    let directory = setup_directory();
+    if !wizard_network_valid(net) || directory.len == 0 || !make_dir(directory) { return false; }
+    var text: u8[>..] = [];
+    text.append("{\"target\":"); json::format_string(text, net.target);
+    text.append(",\"load_path\":"); json::format_string(text, net.load_path);
+    text.append(",\"upload_kbps\":"); json::format_int(text, net.upload_kbps);
+    text.append(",\"interface\":"); json::format_string(text, net.interface_id);
+    text.append("}\n");
+    return write_file_atomic(str(directory, "/network.json"), text);
+}
+fn setup_tune_inputs(net: WizardNetwork&) -> bool {
+    var candidate = net; var kbps: i64 = net.upload_kbps; var iface: u8[>..] = [];
+    if !setup_number("Upload bandwidth to shape to, kbit/s (256..100000; a little under your line's upload)", kbps, kbps) ||
+        !setup_field("WAN interface (eth0, or ppp0 for PPPoE)", net.interface_id, iface) || iface.len > 8 || kbps < 256 { return false; }
+    candidate.upload_kbps = kbps; candidate.interface_id = iface;
+    if !save_wizard_network(candidate) { return false; }
+    net = candidate; return true;
+}
+fn setup_measure_inputs(net: WizardNetwork&) -> bool {
+    var candidate = net; var target: u8[>..] = []; var load: u8[>..] = [];
+    var initial: u8[..128] = "/bulk";
+    if net.load_path.len > 0 { initial = net.load_path; }
+    if !setup_field("Measurement target host:port/path (a server reached across the WAN)", net.target, target) ||
+        !setup_field("Upload path on that server (must accept POST, e.g. /bulk)", initial, load) ||
+        target.len > 128 || load.len > 128 { return false; }
+    candidate.target = target; candidate.load_path = load;
+    if !save_wizard_network(candidate) { return false; }
+    net = candidate; return true;
+}
+fn setup_qos_profile(net: WizardNetwork) -> u8[>..] {
+    var out: u8[>..] = [];
+    out.append(str("{\"bandwidth_kbps\":", net.upload_kbps, ",\"interface\":"));
+    json::format_string(out, net.interface_id);
+    out.append(",\"mode\":\"cake\",\"overhead_bytes\":0}");
+    return out;
+}
+fn setup_confirm(frame: const u8[:]) -> bool {
+    ct_setup_draw(frame, 0);
+    while true {
+        let key = ct_tui_key(-1);
+        if key == 13 || key == 10 { return true; }
+        if key == 27 || key == 3 || key < 0 { return false; }
+        if key == 256 { ct_setup_draw(frame, 0); }
+    }
+    return false;
+}
+fn confirm_qos_apply(d: DeviceState, net: WizardNetwork) -> bool {
+    var frame: u8[>..] = [];
+    frame.append("CONTINUUM / APPLY SHAPING\n--------------------------------------------------------------------------\n");
+    frame.append(str("Router    ", d.candidate_id, "   phase ", d.phase, "\n\n"));
+    frame.append(str("Write ONE root qdisc on the WAN egress (", net.interface_id, "):\n\n  cake bandwidth ", net.upload_kbps,
+        "kbit overhead 0\n\n"));
+    frame.append("Then read it back from the router (tc qdisc show). A rate the router\ndoes not hold is rolled back and refused. No other setting changes.\nReversible: [u] on the final screen restores the kernel default queue.\nThe LOAD gate re-opens: the next step measures this queue.\nNo model call.\n");
+    frame.append("\n[Enter] Apply and read back\n[Esc] Cancel without writing");
+    return setup_confirm(frame);
+}
+fn confirm_measure(net: WizardNetwork) -> bool {
+    var frame: u8[>..] = [];
+    frame.append("CONTINUUM / MEASURE\n--------------------------------------------------------------------------\n");
+    frame.append("Run one upload measurement now?\n\n");
+    frame.append(str("Target   ", net.target, "   (latency probes, idle then loaded)\nLoad     POST ", net.load_path,
+        " on the same server, sustained through the loaded window\n"));
+    frame.append("Samples  20 idle and 20 loaded. Failed probes or a refused upload make\n         the run unclaimable, and an unclaimable run cannot qualify.\n\n");
+    frame.append("Only an upload crosses the router's shaped egress queue, so the target\nmust be reached through the WAN, not on this LAN. Nothing on the router\nis written. The receipt is saved under device/measure-<time>.json.\n");
+    frame.append("\n[Enter] Measure\n[Esc] Cancel without measuring");
+    return setup_confirm(frame);
+}
+fn confirm_qualify(evidence: const u8[:]) -> bool {
+    var frame: u8[>..] = [];
+    frame.append("CONTINUUM / QUALIFY\n--------------------------------------------------------------------------\n");
+    frame.append("Record this measurement as the LOAD gate?\n\n");
+    frame.append(str("Evidence  ", evidence, "\n\n"));
+    frame.append("It counts only if it is claimable, meets the sample floor and was taken\nafter the last lifecycle change (the queue you just applied). This writes\nlocal state only; nothing on the router changes.\n");
+    frame.append("\n[Enter] Qualify\n[Esc] Cancel");
+    return setup_confirm(frame);
+}
+// The last whole output line containing needle.
+fn setup_line_with(text: const u8[:], needle: const u8[:]) -> u8[>..] {
+    var found: u8[>..] = [];
+    var start: i64 = 0;
+    while start < text.len {
+        var stop: i64 = start;
+        while stop < text.len && text[stop] != 10 { stop += 1; }
+        if setup_contains(text[start..stop], needle) { found = []; found.append(text[start..stop]); }
+        start = stop + 1;
+    }
+    return found;
+}
+// The refusal a failed job reports, in its own words: the last JSON reason
+// (or unclaimable verdict), or the text after a FOO_REFUSED / FOO_FAILED tag.
+fn setup_failure_reason(text: const u8[:]) -> u8[>..] {
+    var found: u8[>..] = [];
+    var start: i64 = 0;
+    while start < text.len {
+        var stop: i64 = start;
+        while stop < text.len && text[stop] != 10 { stop += 1; }
+        var hit: u8[>..] = [];
+        if stop > start && text[start] == '{' {
+            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+            let root, err = json::parse(text[start..stop], doc, decoded);
+            let reason, r = json::as_string(json::member(root, "reason"));
+            let verdict, v = json::as_string(json::member(root, "verdict"));
+            if r && reason.len > 0 { hit.append(reason); }
+            else if v && verdict != "claimable" { hit.append(verdict); }
+        } else if stop > start && (setup_contains(text[start..stop], "_REFUSED ") || setup_contains(text[start..stop], "_FAILED ")) {
+            var k: i64 = start;
+            while k < stop && text[k] != ' ' { k += 1; }
+            hit.append(text[k + 1..stop]);
+        }
+        if hit.len > 0 { found = copy(hit); }
+        start = stop + 1;
+    }
+    return found;
+}
 // The setup wizard is the bring-up path: one step at a time, each step stating
 // exactly what it will do. The step is derived from durable device state, so a
 // crash or restart resumes at the first unfinished step.
-fn setup_wizard_step(d: DeviceState, cfg: ModelConfig, bound: bool, rebooted: bool, tuned: bool, settled: bool) -> i64 {
+fn setup_wizard_step(d: DeviceState, cfg: ModelConfig, bound: bool, key_ok: bool, tuned: bool, settled: bool) -> i64 {
     if !bound || d.candidate_id.len == 0 { return 1; }
     // Enrollment is offered until the unit has been seen to be past it: a
     // factory unit gets set up, and a router that is already configured makes
     // the ceremony refuse safely -- which settles this step either way.
     if !d.runtime_verified && !settled { return 2; }
-    if !meta_credentials_available(cfg) { return 3; }
-    if !d.persistence_verified && d.phase != "baseline_applied" { return 4; }
-    if !d.persistence_verified { return if rebooted { 6 } else { 5 }; }
+    // Only commissioning needs Meta, and only with a key the provider has
+    // accepted: a bad key fails here, in words, not as an opaque agent error.
+    let commissioned = d.phase == "baseline_applied" || d.phase == "reboot_pending" ||
+        d.phase == "network_qualification_required";
+    if !commissioned { return if meta_credentials_available(cfg) && key_ok { 4 } else { 3 }; }
+    if d.phase == "baseline_applied" { return 5; }
+    // reboot_pending is durable: a restart after the reboot request resumes
+    // at the persistence check instead of commissioning again.
+    if d.phase == "reboot_pending" || !d.persistence_verified { return 6; }
     if !d.network_load_verified { return if tuned { 8 } else { 7 }; }
     return 0;
 }
@@ -496,12 +660,56 @@ fn setup_wrap(out: u8[>..]&, text: const u8[:], width: i64) {
         start = next;
     }
 }
-fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
-        rebooted: bool, tuned: bool, settled: bool, details: const u8[:], notice: const u8[:], busy: bool,
-        failed: bool, show_raw: bool) {
+fn setup_wizard_advice(out: u8[>..]&, step: i64, reason: const u8[:]) {
+    if setup_contains(reason, "already set up") {
+        out.append("  Take it over as it is: press p and type the admin password this\n");
+        out.append("  router already uses. Continuum verifies it, stores it in the OS\n");
+        out.append("  vault, and continues -- nothing on the router is changed.\n\n");
+        out.append("  Or make it factory again: hold RESET about 10 seconds, until its\n");
+        out.append("  LEDs blink, then press Enter here to run the ceremony.\n");
+    } else if setup_contains(reason, "secured bands") {
+        out.append("  This unit is already configured. Press Enter to go on with the\n");
+        out.append("  credential Continuum already holds for it.\n");
+    } else if step == 3 {
+        out.append("  The provider did not accept this key. Press k to enter another\n");
+        out.append("  key, or Enter to test this one again (one call each).\n");
+    } else if setup_contains(reason, "reboot_not_observed") {
+        out.append("  The router did not restart. Power-cycle it (unplug it for ten\n");
+        out.append("  seconds), wait until it answers, then press Enter to verify again.\n");
+    } else if setup_contains(reason, "has not answered") {
+        out.append("  Check the router's power and cable. When it answers again, press\n");
+        out.append("  Enter to verify persistence.\n");
+    } else if setup_contains(reason, "qdisc_tool_unavailable") {
+        out.append("  This firmware has no tc, so it cannot host the shaping queue.\n");
+        out.append("  Nothing was written. Press Esc to stop here.\n");
+    } else if setup_contains(reason, "already_managed") {
+        out.append("  Vendor QoS owns the WAN queue. Turn off Adaptive QoS and the\n");
+        out.append("  bandwidth limiter in the router's web UI, then press Enter.\n");
+    } else if setup_contains(reason, "readback") {
+        out.append("  The router did not hold that queue and it was rolled back. Press c\n");
+        out.append("  to choose a lower bandwidth, then Enter.\n");
+    } else if step == 8 {
+        out.append("  Press c to fix the target or upload path, or Enter to measure\n");
+        out.append("  again. The far end must accept POST and be reached via the WAN.\n");
+    } else if setup_contains(reason, "unreachable") || setup_contains(reason, "transport") {
+        out.append("  Check the link to the router (cable or Wi-Fi), then press Enter\n");
+        out.append("  to try this step again.\n");
+    } else {
+        out.append("  Press Enter to retry this step. If it fails the same way, press\n");
+        out.append("  i and share the raw output.\n");
+    }
+}
+fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_ok: bool, tuned: bool, settled: bool,
+        qos_checked: bool, evidence: const u8[:], watching: bool, watch_down: bool, details: const u8[:],
+        notice: const u8[:], busy: bool, failed: bool, why: const u8[:], show_raw: bool) -> i64 {
     var d = DeviceState {};
     let bound = device_saved(setup_directory(), d) && d.candidate_id.len > 0;
-    let step = setup_wizard_step(d, cfg, bound, rebooted, tuned, settled);
+    let step = setup_wizard_step(d, cfg, bound, key_ok, tuned, settled);
+    let has_key = meta_credentials_available(cfg);
+    var net = WizardNetwork {};
+    load_wizard_network(net);
+    var resident = ResidentStatus {};
+    let running = setup_resident_status(resident) && resident.valid && resident.phase == "monitoring";
     out.append("CONTINUUM / SETUP\n");
     out.append("--------------------------------------------------------------------------\n");
     var banner: u8[>..] = [];
@@ -510,7 +718,7 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     else if step == 3 { banner.append("META KEY"); }
     else if step == 4 { banner.append("SET THE ROUTER UP"); }
     else if step == 5 { banner.append("REBOOT"); }
-    else if step == 6 { banner.append("VERIFY PERSISTENCE"); }
+    else if step == 6 { banner.append(if watching { "WAITING FOR THE ROUTER" } else { "VERIFY PERSISTENCE" }); }
     else if step == 7 { banner.append("TUNE"); }
     else if step == 8 { banner.append("MEASURE"); }
     else { banner.append("SETUP COMPLETE"); }
@@ -525,43 +733,46 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
     } else if step == 2 {
         out.append("Creates this router's admin credential, renames its Wi-Fi and\nrotates the passphrase. This host may drop off Wi-Fi and rejoin.\n\nFactory-only: a unit that is already configured refuses safely and\nnothing on it changes. On that failure you can take the unit over\nwith the admin password it already uses.\n");
     } else if step == 3 {
-        out.append("Meta needs a key to set the router up. It is hidden while you\ntype, kept in this session unless you choose the Keychain, and\nnever printed or written to settings.\n");
+        if has_key { out.append("A key is configured but not verified. One connection-test call\n(up to 256 output tokens) proves the provider accepts it before\nMeta is trusted with the router.\n"); }
+        else { out.append("Meta needs a key to set the router up. It is hidden while you\ntype, kept in this session unless you choose the Keychain, and\nnever printed or written to settings. One connection-test call\nthen proves the provider accepts it.\n"); }
     } else if step == 4 {
-        out.append("Meta inspects the router and applies its owned baseline: vendor\nservices stripped, fully reversible. No reboot, no reset and no\nfirmware change.\n");
+        out.append("Meta inspects the router and applies its owned baseline: vendor\nservices stripped, fully reversible. No reboot, no reset and no\nfirmware change. The step counts only when the router's own receipt\nshows the baseline applied with runtime and recovery verified.\n");
     } else if step == 5 {
         out.append("One reboot proves the baseline persists. The network drops for\na few minutes. This approves exactly one reboot, nothing else.\n");
+    } else if step == 6 && watching {
+        out.append("Reboot requested. Continuum waits for the router to stop answering\nand answer again (a protected read every few seconds; nothing is\nwritten). The request's own exit code is not trusted either way.\n");
+        out.append(str("\n  Went down   ", if watch_down { "yes" } else { "not yet" }, "\n"));
     } else if step == 6 {
-        out.append("The router is back. Meta proves the owned baseline survived the\nreboot and records the persistence gate.\n");
+        out.append("Continuum reads the router again and proves the owned baseline\nsurvived the restart: a new boot identity and every owned setting\nstill in force. Deterministic; no model call.\n");
+    } else if step == 7 && !qos_checked {
+        out.append("Shaping is one CAKE root qdisc on the WAN egress. First a read-only\npreflight checks that the router has tc and reads its current root\nqueue. The preflight writes nothing.\n");
     } else if step == 7 {
-        out.append("Meta applies the optimization under the same permission: CAKE\nshaping, no bufferbloat. Reversible -- the owned baseline can be\nrestored at any time.\n");
+        out.append("Next: write ONE root qdisc and read it back from the router.\n");
+        if net.upload_kbps > 0 { out.append(str("Saved profile: cake ", net.upload_kbps, " kbit/s on ", net.interface_id, " ([c] changes it).\n")); }
+        else { out.append("The first apply asks once for your upload bandwidth and WAN\ninterface.\n"); }
+    } else if step == 8 && evidence.len == 0 {
+        out.append("One upload measurement across the WAN: idle probes, then the same\nprobes while uploading. Only an upload crosses the shaped queue.\nNothing on the router is written.\n");
+        if net.target.len > 0 { out.append(str("\n  Target  ", net.target, "\n  Upload  POST ", net.load_path, "   ([c] changes them)\n")); }
+        else { out.append("\nThe first run asks once for a far-end server you control.\n"); }
     } else if step == 8 {
-        out.append("The last gate is a real loaded run, and it needs a target you\nchoose. Run these two, then come back:\n\n  continuum --measure host:port/path /load-path\n  continuum --device-qualify <receipt> --execute\n");
+        out.append("The measurement below is claimable. Qualifying records it as the\nLOAD gate; only a run taken after the last change can count.\n");
     } else {
-        out.append("Every gate is earned. The panels hold the evidence.\n");
+        out.append("Every gate is earned; the panels hold the evidence.\n");
+        if running {
+            out.append(str("\nMonitor  monitoring, pid ", resident.pid, ", ", resident.samples, " samples every ",
+                resident.interval_ms, " ms\n"));
+        } else if resident.valid { out.append(str("\nMonitor  ", resident.phase, " -- not running\n")); }
+        else { out.append("\nMonitor  not running\n"); }
     }
-    out.append(str("\nRouter  ", if bound { d.candidate_id } else { "none bound" }, "\nPhase   ", d.phase,
-        "\nKey     ", if meta_credentials_available(cfg) { "configured" } else { "missing" }, "\n"));
+    out.append(str("\nRouter  ", if bound { d.candidate_id } else { "none bound" }, "   Phase  ", d.phase,
+        "   Key  ", if !has_key { "missing" } else if key_ok { "verified" } else { "unverified" }, "\n"));
     if failed {
         // A refusal is a fact the owner has to act on, not a JSON wall.
+        let reason = if why.len > 0 { why } else { d.reason };
         out.append("\nWHY IT STOPPED\n");
-        setup_wrap(out, if d.reason.len > 0 { d.reason } else { "the step was refused; no detail was recorded" }, 72);
+        setup_wrap(out, if reason.len > 0 { reason } else { "the step was refused; no detail was recorded" }, 72);
         out.append("\nWHAT TO DO\n");
-        if setup_contains(d.reason, "already set up") {
-            out.append("  Take it over as it is: press p and type the admin password this\n");
-            out.append("  router already uses. Continuum verifies it, stores it in the OS\n");
-            out.append("  vault, and continues -- nothing on the router is changed.\n\n");
-            out.append("  Or make it factory again: hold RESET about 10 seconds, until its\n");
-            out.append("  LEDs blink, then press Enter here to run the ceremony.\n");
-        } else if setup_contains(d.reason, "secured bands") {
-            out.append("  This unit is already configured. Press Enter to go on with the\n");
-            out.append("  credential Continuum already holds for it.\n");
-        } else if setup_contains(d.reason, "unreachable") || setup_contains(d.reason, "transport") {
-            out.append("  Check the link to the router (cable or Wi-Fi), then press Enter\n");
-            out.append("  to try this step again.\n");
-        } else {
-            out.append("  Press Enter to retry this step. If it fails the same way, press\n");
-            out.append("  i and share the raw output.\n");
-        }
+        setup_wizard_advice(out, step, reason);
         if show_raw && details.len > 0 {
             out.append("\nRAW OUTPUT (i hides this)\n");
             var raw_tail: u8[>..] = [];
@@ -570,33 +781,36 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
             out.append(raw_tail);
         }
     } else if details.len > 0 {
-        out.append("----- last step -----\n");
+        out.append("\n");
         var tail: u8[>..] = [];
         var i: i64 = if details.len > 600 { details.len - 600 } else { 0 };
         while i < details.len { tail.push(details[i]); i += 1; }
         out.append(tail);
     }
-    if busy { out.append("\nRunning. q cancels; an uncertain step is never replayed.\n"); }
+    if busy && !watching { out.append("\nRunning. q cancels; an uncertain step is never replayed.\n"); }
     else if notice.len > 0 { out.append("\n"); out.append(notice); out.append("\n"); }
     // The renderer pins the last three lines, so the actions are exactly these.
     out.append("\n");
-    if busy { out.append("[q] Cancel this step and quit\n"); }
+    if watching { out.append("[q] Stop waiting and quit\n"); }
+    else if busy { out.append("[q] Cancel this step and quit\n"); }
     else if failed {
         // Takeover stays offered for any failure on the enroll step: the only
         // credential this could overwrite is one that just failed to answer.
-        out.append(if step == 2 { "[Enter] Retry    [p] Take over    [i] Raw output\n" }
-            else { "[Enter] Retry this step    [i] Raw output\n" });
+        if step == 2 { out.append("[Enter] Retry    [p] Take over    [i] Raw output\n"); }
+        else if step == 3 { out.append("[Enter] Test again    [k] New key    [i] Raw output\n"); }
+        else if (step == 7 && qos_checked) || step == 8 { out.append("[Enter] Retry    [c] Change inputs    [i] Raw output\n"); }
+        else { out.append("[Enter] Retry this step    [i] Raw output\n"); }
     }
     else if step == 1 { out.append("[Enter] Bind this router\n"); }
     else if step == 2 { out.append("[Enter] Enroll this router\n"); }
-    else if step == 3 { out.append("[Enter] Enter the Meta key\n"); }
+    else if step == 3 { out.append(if has_key { "[Enter] Verify the key (one call)    [k] New key\n" } else { "[Enter] Enter the Meta key\n" }); }
     else if step == 4 { out.append("[Enter] Let Meta set it up\n"); }
     else if step == 5 { out.append("[Enter] Reboot now (one time)\n"); }
     else if step == 6 { out.append("[Enter] Verify persistence\n"); }
-    else if step == 7 { out.append("[Enter] Let Meta tune it\n"); }
-    else if step == 8 { out.append("[Enter] Re-check the gates\n"); }
-    else { out.append("[Enter] Re-check the gates\n"); }
-    out.append(if busy { "Keys are locked while a step runs.\n" } else { "[Esc] Quit    [a] Advanced panels\n" });
+    else if step == 7 { out.append(if qos_checked { "[Enter] Apply shaping    [c] Change bandwidth\n" } else { "[Enter] Read the WAN queue (read-only)\n" }); }
+    else if step == 8 { out.append(if evidence.len > 0 { "[Enter] Qualify with this measurement\n" } else { "[Enter] Run the upload measurement    [c] Change target\n" }); }
+    else { out.append(if running { "[Enter] Refresh    [u] Undo the shaping\n" } else { "[Enter] Start the resident monitor    [u] Undo the shaping\n" }); }
+    out.append(if watching { "Waiting for the router; keys are locked.\n" } else if busy { "Keys are locked while a step runs.\n" } else { "[Esc] Quit    [a] Advanced panels\n" });
     let names: const u8[:][..8] = ["BIND", "ENROLL", "KEY", "SETUP", "REBOOT", "VERIFY", "TUNE", "MEASURE"];
     var i2: i64 = 0;
     while i2 < 8 {
@@ -606,6 +820,7 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:],
         i2 += 1;
     }
     out.append("\n");
+    return step;
 }
 fn setup_section_name(section: i64) -> const u8[:] {
     if section == 1 { return "NETWORK"; }
@@ -817,10 +1032,17 @@ fn run_setup_tui() -> bool {
     // Enter per step, each step stating exactly what it will do.
     var wizard = !(startup_bound && startup_ready);
     if wizard { notice = []; }
-    var rebooted = false; var tuned = false; var wizard_job: i64 = 0;
+    var tuned = false; var wizard_job: i64 = 0;
     // A failed step is explained in words on the same screen; raw output is
-    // opt-in (i), never the default.
-    var step_failed = false; var show_raw = false;
+    // opt-in (i), never the default. fail_reason carries the job's own refusal.
+    var step_failed = false; var show_raw = false; var fail_reason: u8[>..] = [];
+    // TUNE runs a read-only preflight before its write; MEASURE produces the
+    // evidence path that QUALIFY consumes.
+    var qos_checked = false; var evidence: u8[>..] = [];
+    // After a reboot request the router's return is the success signal, not
+    // the request's exit code: a real unit drops the link mid-request.
+    var watching = false; var watch_down = false; var watch_start: i64 = 0; var watch_next: i64 = 0;
+    var ready_view = false;
     // Enrollment settles when the ceremony succeeds or when the unit refuses
     // because it is already configured; either way the step is done.
     var settled = false;
@@ -830,8 +1052,10 @@ fn run_setup_tui() -> bool {
         if dirty {
             var wframe: u8[>..] = [];
             if wizard {
-                setup_wizard_body(wframe, cfg, network, rebooted, tuned, settled, details, notice, busy,
-                    step_failed, show_raw);
+                let drawn = setup_wizard_body(wframe, cfg, network, verified, tuned, settled, qos_checked, evidence,
+                    watching, watch_down, details, notice, busy, step_failed, fail_reason, show_raw);
+                // READY shows the live monitor; it repaints once a second.
+                ready_view = drawn == 0 && !busy;
                 ct_setup_draw(wframe, 0); dirty = false;
             } else {
             var frame: u8[>..] = [];
@@ -879,19 +1103,27 @@ fn run_setup_tui() -> bool {
             ct_setup_draw(frame, scroll); dirty = false;
             }
         }
-        let key = ct_tui_key(if busy { 100 } else { -1 });
+        let key = ct_tui_key(if busy || watching { 100 } else if wizard && ready_view { 1000 } else { -1 });
         if key == 'q' || key == 3 || key < 0 { ct_tui_job_cancel(); break; }
         // A job owns the current snapshot. Do not replace settings/credentials
         // underneath it; q cancels its whole child process group.
         if !busy {
             // Wizard keys: Enter advances exactly one step; Esc ends the program
             // and a opens the panels. Every step keeps its own confirm frame.
-            if wizard && (key == 13 || key == 10) {
-                notice = [];
-                step_failed = false; show_raw = false;
+            if wizard && watching {
+                // Waiting for a rebooting router: only quitting is offered.
+                if key == 27 { break; }
+            } else if wizard && (key == 13 || key == 10 || key == 'k' || key == 'c' || key == 'u') {
                 var wd = DeviceState {};
                 let wbound = device_saved(setup_directory(), wd) && wd.candidate_id.len > 0;
-                let wstep = setup_wizard_step(wd, cfg, wbound, rebooted, tuned, settled);
+                let wstep = setup_wizard_step(wd, cfg, wbound, verified, tuned, settled);
+                let enter = key == 13 || key == 10;
+                // A letter acts only on the screen that offers it.
+                let offered = enter || (key == 'k' && wstep == 3) || (key == 'u' && wstep == 0) ||
+                    (key == 'c' && ((wstep == 7 && qos_checked) || (wstep == 8 && evidence.len == 0)));
+                if offered {
+                notice = [];
+                step_failed = false; show_raw = false; fail_reason = [];
                 if wstep == 1 {
                     let gateway = setup_gateway_candidate(network);
                     if gateway.len == 0 { notice.append("No single default-route router; press a, then p."); }
@@ -918,30 +1150,77 @@ fn run_setup_tui() -> bool {
                         } else { notice.append("Could not start enrollment."); }
                     }
                 } else if wstep == 3 {
-                    let key_result = ct_tui_key_setup(); verified = false;
-                    notice.append(if key_result == 1 { "Key saved in Keychain; provider not tested." }
-                        else if key_result == 2 { "Key set for this session; provider not tested." }
-                        else { "Key entry cancelled or rejected; previous key unchanged." });
-                } else if wstep == 4 || wstep == 6 || wstep == 7 {
-                    job = []; job.append("device-setup");
-                    if !meta_credentials_available(cfg) { notice.append("The Meta key is missing; press a, then m."); }
+                    var have_key = meta_credentials_available(cfg);
+                    if key == 'k' || !have_key {
+                        let key_result = ct_tui_key_setup(); verified = false;
+                        have_key = key_result == 1 || key_result == 2;
+                        if !have_key { notice.append("Key entry cancelled or rejected; nothing was tested."); }
+                    }
+                    if have_key {
+                        job = []; job.append("test-key");
+                        if !confirm_setup_job(cfg, job) { notice.append("Key not tested; Meta setup stays locked until it is."); }
+                        else if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; wizard_job = 3;
+                            notice.append("Testing the key with one connection-test call.");
+                        } else { notice.append("Could not start the key test."); }
+                    }
+                } else if wstep == 4 || wstep == 5 || wstep == 6 || (wstep == 7 && !qos_checked) || (wstep == 0 && key == 'u') {
+                    // One deterministic device job per step; only step 4 is Meta.
+                    job = [];
+                    job.append(if wstep == 4 { "device-setup" } else if wstep == 5 { "device-reboot" }
+                        else if wstep == 6 { "device-verify" } else if wstep == 7 { "device-qos-status" } else { "qos-restore" });
+                    let code = if wstep == 4 { 4 } else if wstep == 5 { 5 } else if wstep == 6 { 6 } else if wstep == 7 { 11 } else { 13 };
+                    if wstep == 4 && !meta_credentials_available(cfg) { notice.append("The Meta key is missing; press k on step 3."); }
                     else if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
                     else if ct_setup_job_start(job) == 0 {
-                        busy = true; details = []; wizard_job = wstep;
-                        notice.append("Meta is working. q cancels.");
+                        busy = true; details = []; wizard_job = code;
+                        notice.append(if wstep == 4 { "Meta is working. q cancels." } else if wstep == 5 { "Approving exactly one reboot." }
+                            else { "Working on the router; no model call." });
                     } else { notice.append("Could not start the step."); }
-                } else if wstep == 5 {
-                    job = []; job.append("device-reboot");
-                    if !confirm_device_job(job) { notice.append("Nothing dispatched."); }
-                    else if ct_setup_job_start(job) == 0 {
-                        busy = true; details = []; wizard_job = 5;
-                        notice.append("Approving exactly one reboot.");
-                    } else { notice.append("Could not start the reboot."); }
+                } else if wstep == 7 {
+                    var net = WizardNetwork {};
+                    let loaded = load_wizard_network(net);
+                    if (!loaded || key == 'c' || net.upload_kbps == 0) && !setup_tune_inputs(net) {
+                        notice.append("Shaping inputs cancelled or out of range; nothing written.");
+                    } else if !confirm_qos_apply(wd, net) { notice.append("Nothing written."); }
+                    else {
+                        job = []; job.append("qos:"); job.append(setup_qos_profile(net));
+                        if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; wizard_job = 7;
+                            notice.append("Applying the queue and reading it back.");
+                        } else { notice.append("Could not start the apply."); }
+                    }
+                } else if wstep == 8 && evidence.len == 0 {
+                    var net = WizardNetwork {};
+                    let loaded = load_wizard_network(net);
+                    if (!loaded || key == 'c' || net.target.len == 0 || net.load_path.len == 0) && !setup_measure_inputs(net) {
+                        notice.append("Measurement target cancelled or invalid; nothing measured.");
+                    } else if net.target.len == 0 || net.load_path.len == 0 { notice.append("A target and an upload path are both required.");
+                    } else if !confirm_measure(net) { notice.append("Nothing measured."); }
+                    else {
+                        job = []; job.append("measure:"); job.append(net.target); job.append("\n"); job.append(net.load_path);
+                        if ct_setup_job_start(job) == 0 {
+                            busy = true; details = []; wizard_job = 8;
+                            notice.append("Measuring: an idle window, then the upload window.");
+                        } else { notice.append("Could not start the measurement."); }
+                    }
+                } else if wstep == 8 {
+                    job = []; job.append("qualify:"); job.append(evidence);
+                    if !confirm_qualify(evidence) { notice.append("Not qualified; the measurement is kept."); }
+                    else if ct_setup_job_start(job) == 0 { busy = true; details = []; wizard_job = 12; }
+                    else { notice.append("Could not start qualification."); }
                 } else {
-                    notice.append(if wstep == 8 { "Run the two commands above, then press Enter again." }
-                        else { "Every gate is earned; press a for the panels." });
+                    var resident = ResidentStatus {};
+                    if setup_resident_status(resident) && resident.valid && resident.phase == "monitoring" {
+                        notice.append("The resident monitor is running; this screen refreshes every second.");
+                    } else {
+                        let pid = setup_background_monitor();
+                        if pid > 0 { notice.append(str("Monitor started (pid ", pid, "); it keeps running after this screen closes.")); }
+                        else { notice.append("Monitor not started: cancelled, already running, or unverified. No router changes."); }
+                    }
                 }
                 dirty = true;
+                }
             } else if wizard && key == 27 {
                 // Esc ends the program. The dense panels are a debugging
                 // surface, not the place you land when leaving setup.
@@ -1006,7 +1285,7 @@ fn run_setup_tui() -> bool {
             else if key == 'o' { screen = 2; details = []; notice = []; scroll = 0; dirty = true; }
             else if key == 'p' {
                 let selected = setup_select_device(); notice = [];
-                if selected { settled = false; rebooted = false; tuned = false; }
+                if selected { settled = false; tuned = false; qos_checked = false; evidence = []; }
                 notice.append(if selected { "Device selected; no enrollment or write dispatched." }
                     else { "Selection cancelled, invalid or binding already in use; target unchanged." });
                 details = []; screen = 2; scroll = 0; dirty = true;
@@ -1130,66 +1409,166 @@ fn run_setup_tui() -> bool {
                 dirty = true;
             }
         }
+        // A rebooting router is probed on a schedule, one protected read at a time.
+        if watching && !busy && time_ns() / 1000000 >= watch_next {
+            job = []; job.append("device-inspect");
+            if ct_setup_job_start(job) == 0 { busy = true; wizard_job = 10; }
+            else { watch_next = time_ns() / 1000000 + 2000; }
+        }
         if busy {
             var output: u8[..32768] = [0; 32768]; var n: i64 = 0;
             let result = ct_setup_job_poll(output, n);
             if result != 1 {
-                busy = false; dirty = true; notice = [];
+                busy = false; dirty = true;
                 // The role belongs to the job that just finished, not to whatever
                 // runs next: capture it and clear it for the following dispatch.
                 let finished = wizard_job; wizard_job = 0;
-                // The wizard explains a refusal in words on its own screen;
-                // a second generic line would only add noise.
-                if !wizard { notice.append(if result == 0 { "Requested job completed." } else { "Job failed; inspect details. No automatic retry." }); }
-                if n > 0 && n <= output.len {
-                    if job == "discover" && result == 0 { screen = 1; network = []; network.append(output[..n]); observed_wall_ms = time_ns() / 1000000; }
-                    else if job.len >= 7 && job[..7] == "device-" {
-                        if result == 0 && job == "device-reboot" { rebooted = true; }
-                        if result == 0 && wizard && finished == 7 { tuned = true; }
-                        if finished == 2 && (result == 0 || setup_contains(output[..n], "secured bands")) { settled = true; }
-                        if finished == 9 && result == 0 { settled = true; }
-                        if wizard {
-                            // Stay in the wizard: the receipt is evidence, the
-                            // next step is already computed from device state.
-                            screen = 2;
-                            step_failed = result != 0;
-                            show_raw = false;
-                            details = [];
-                            // The wizard states outcomes; the receipt stays in the
-                            // panels and behind i instead of scrolling past.
-                            if result != 0 {
-                                details.append("STEP FAILED\n\n"); details.append(output[..n]);
-                            } else if finished == 9 {
-                                notice.append("Password accepted; the router is now bound under it.");
+                var text: u8[>..] = [];
+                if n > 0 && n <= output.len { text.append(output[..n]); }
+                if wizard && finished > 0 {
+                    // Stay in the wizard: every outcome is read from the job's
+                    // receipt or the durable device record, never assumed.
+                    let ok = result == 0;
+                    let now = time_ns() / 1000000;
+                    var after = DeviceState {};
+                    device_saved(setup_directory(), after);
+                    screen = 2; show_raw = false; fail_reason = [];
+                    if finished != 10 { notice = []; details = []; }
+                    step_failed = !ok;
+                    if finished == 2 {
+                        if ok || setup_contains(text, "secured bands") { settled = true; }
+                    } else if finished == 9 {
+                        if ok { settled = true; notice.append("Password accepted; the router is now bound under it."); }
+                    } else if finished == 3 {
+                        verified = ok;
+                        if ok { details.append("KEY        accepted by the provider (one connection-test call)\n"); }
+                    } else if finished == 4 {
+                        let applied = after.phase == "baseline_applied" && after.runtime_verified && after.recovery_verified;
+                        if ok && !applied {
+                            step_failed = true;
+                            fail_reason.append("Meta finished without a verified owned baseline on the router; nothing counts until the router's receipt shows one");
+                        } else if ok {
+                            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                            let line = setup_line_with(text, "\"summary\"");
+                            let root, err = json::parse(line, doc, decoded);
+                            let summary, s = json::as_string(json::member(root, "summary"));
+                            if s { details.append("META SAID  "); details.append(summary); details.append("\n"); }
+                            details.append("RECEIPT    baseline applied; runtime and recovery verified by the router\n");
+                        }
+                    } else if finished == 5 {
+                        if after.phase == "reboot_pending" {
+                            // Requested: from here the router's return decides.
+                            step_failed = false; watching = true; watch_down = false;
+                            watch_start = now; watch_next = now + 2000;
+                            notice.append("Reboot requested. Waiting for the router to stop answering and come back.");
+                            if !ok { details.append("The request lost its answer, as a router going down mid-request does.\n"); }
+                        }
+                    } else if finished == 10 {
+                        step_failed = false;
+                        if ok && (watch_down || now - watch_start >= 300000) {
+                            watching = false; notice = [];
+                            notice.append(if watch_down { "The router stopped answering and is back. Press Enter to verify persistence." }
+                                else { "The router never stopped answering in 5 minutes; verification checks the boot identity anyway." });
+                        } else if !ok && now - watch_start >= 600000 {
+                            watching = false; step_failed = true; notice = [];
+                            fail_reason.append("the router has not answered for 10 minutes after the reboot request");
+                        } else {
+                            if !ok { watch_down = true; }
+                            watch_next = now + 2000;
+                            dirty = !ok || watch_down;
+                        }
+                    } else if finished == 6 {
+                        if ok && after.persistence_verified {
+                            details.append("PERSIST    verified by the router: new boot identity, owned baseline in force\n");
+                        } else { step_failed = true; }
+                    } else if finished == 11 {
+                        if ok {
+                            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                            let line = setup_line_with(text, "\"qos_status\"");
+                            let root, err = json::parse(line, doc, decoded);
+                            let qdisc, q = json::as_string(json::member(root, "qdisc"));
+                            let iface, i = json::as_string(json::member(root, "qos_interface"));
+                            if q && i {
+                                qos_checked = true;
+                                details.append(str("PREFLIGHT  tc present; ", iface, " root queue now: ", qdisc, "\n"));
+                            } else { step_failed = true; fail_reason.append("qos_preflight_receipt_unreadable"); }
+                        }
+                    } else if finished == 7 {
+                        if ok {
+                            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                            let line = setup_line_with(text, "\"qos_applied\"");
+                            let root, err = json::parse(line, doc, decoded);
+                            let verified_qos, v = json::as_bool(json::member(root, "qos_verified"));
+                            let rate, r = json::as_string(json::member(root, "rate_readback"));
+                            let mode, m = json::as_string(json::member(root, "qos_mode"));
+                            let kbps, k = json::as_i64(json::member(root, "bandwidth_kbps"));
+                            let iface, i = json::as_string(json::member(root, "qos_interface"));
+                            let shown, a = json::as_string(json::member(root, "after_qdisc"));
+                            if v && verified_qos && r && rate == "verified" && m && k && i && a {
+                                tuned = true;
+                                details.append(str("QDISC      ", mode, " ", kbps, " kbit/s on ", iface, "\nREADBACK   verified on the router: ", shown, "\n"));
+                            } else { step_failed = true; fail_reason.append("qos_readback_unverified"); }
+                        }
+                    } else if finished == 8 {
+                        let marker = setup_line_with(text, "MEASURE_EVIDENCE ");
+                        var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                        let line = setup_line_with(text, "\"verdict\"");
+                        let root, err = json::parse(line, doc, decoded);
+                        let verdict, vd = json::as_string(json::member(root, "verdict"));
+                        let body = json::member(root, "evidence");
+                        let idle, il = json::as_i64(json::member(body, "idle_samples"));
+                        let loaded, ld = json::as_i64(json::member(body, "loaded_samples"));
+                        let moved, mv = json::as_i64(json::member(body, "load_bytes"));
+                        if ok && marker.len > 17 && vd && verdict == "claimable" && il && ld && mv {
+                            details.append(str("MEASURED   claimable: ", idle, " idle and ", loaded, " loaded samples, ", moved,
+                                " bytes uploaded\nEVIDENCE   ", marker[17..], "\n"));
+                            evidence = []; evidence.append(marker[17..]);
+                        } else { step_failed = true; }
+                    } else if finished == 12 {
+                        evidence = [];
+                        if ok { notice.append("LOAD gate recorded from this checkout's measurement."); }
+                    } else if finished == 13 {
+                        if ok {
+                            tuned = false; qos_checked = false; evidence = [];
+                            notice.append("Shaping removed; the kernel default queue is back. TUNE and MEASURE re-open.");
+                        }
+                    }
+                    if step_failed {
+                        if fail_reason.len == 0 { fail_reason = setup_failure_reason(text); }
+                        details = []; details.append("STEP FAILED\n\n"); details.append(text);
+                    }
+                } else {
+                    notice = [];
+                    notice.append(if result == 0 { "Requested job completed." } else { "Job failed; inspect details. No automatic retry." });
+                    if text.len > 0 {
+                        if job == "discover" && result == 0 { screen = 1; network = []; network.append(text); observed_wall_ms = time_ns() / 1000000; }
+                        else if job.len >= 7 && job[..7] == "device-" {
+                            screen = 6;
+                            details = []; setup_device_view(details);
+                            if job == "device-setup" || job == "device-enroll" || result != 0 {
+                                details.append("\nOPERATION RECEIPT\n"); details.append(text);
                             }
                         } else {
                             screen = 6;
-                            details = []; setup_device_view(details);
-                            var selected = DeviceState {};
-                            if job == "device-setup" || job == "device-enroll" || result != 0 {
-                                details.append("\nOPERATION RECEIPT\n"); details.append(output[..n]);
-                            }
+                            details = [];
+                            var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+                            let root, err = json::parse(text, doc, decoded);
+                            let summary, has_summary = json::as_string(json::member(root, "summary"));
+                            if has_summary {
+                                details.append(if job.len > 5 && job[..5] == "talk:" { "META / OWNER CONVERSATION\n\n" }
+                                    else { "META / READ-ONLY ASSESSMENT\n\n" }); details.append(summary);
+                                details.append("\n\nModel text is not evidence or a new grant of authority.\n");
+                                let reason, r = json::as_string(json::member(root, "reason"));
+                                if r && reason.len > 0 { details.append(str("\n", reason, "\n")); }
+                            } else { details.append(text); }
+                            if job == "test-key" { verified = result == 0; }
                         }
-                    } else {
-                        screen = 6;
-                        details = [];
-                        var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
-                        let root, err = json::parse(output[..n], doc, decoded);
-                        let summary, has_summary = json::as_string(json::member(root, "summary"));
-                        if has_summary {
-                            details.append(if job.len > 5 && job[..5] == "talk:" { "META / OWNER CONVERSATION\n\n" }
-                                else { "META / READ-ONLY ASSESSMENT\n\n" }); details.append(summary);
-                            details.append("\n\nModel text is not evidence or a new grant of authority.\n");
-                            let reason, r = json::as_string(json::member(root, "reason"));
-                            if r && reason.len > 0 { details.append(str("\n", reason, "\n")); }
-                        } else { details.append(output[..n]); }
-                        if job == "test-key" { verified = result == 0; }
                     }
                 }
             }
         }
         // Resize is an event, not a periodic repaint or animation.
-        if key == 256 { dirty = true; }
+        if key == 256 || (key == 0 && wizard && ready_view && !busy) { dirty = true; }
     }
     ct_tui_close();
     return true;
