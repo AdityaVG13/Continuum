@@ -59,18 +59,19 @@ $(BUILD)/continuum_c.o: $(BUILD)/continuum.c
 
 DEVICE_NATIVE := native/leap_bridge.c native/asus_web.cpp
 PROGRAM_NATIVE := native/program.cpp
+PROBE_NATIVE := native/probe.cpp
 $(BUILD)/continuum: $(BUILD)/continuum_c.o $(wildcard native/*.c native/*.cpp native/*.h) Makefile $(wildcard $(BUILD)/signing.mk)
-	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/meta_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/host_macos.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp $(PLATFORM_LIBS) -o $@
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/meta_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/host_macos.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp $(PROBE_NATIVE) $(PLATFORM_LIBS) -o $@
 	$(call SIGN_BINARY,org.continuum.controller,$@)
 
 tui: $(BUILD)/continuum
 	./$(BUILD)/continuum --tui
 
 $(BUILD)/continuum-setup-test: $(BUILD)/continuum_c.o tests/setup_meta.cpp $(wildcard native/*.c native/*.cpp native/*.h)
-	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp tests/host_fake.cpp $(PLATFORM_LIBS) -o $@
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp tests/host_fake.cpp $(PROBE_NATIVE) $(PLATFORM_LIBS) -o $@
 
 $(BUILD)/continuum-service-test: $(BUILD)/continuum_c.o tests/service_host.cpp tests/setup_meta.cpp $(wildcard native/*.c native/*.cpp native/*.h)
-	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/service_host.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) tests/commission_host.cpp tests/host_fake.cpp $(PLATFORM_LIBS) -o $@
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/service_host.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) tests/commission_host.cpp tests/host_fake.cpp $(PROBE_NATIVE) $(PLATFORM_LIBS) -o $@
 
 owner-check: $(BUILD)/continuum $(BUILD)/continuum-setup-test
 	python3 tests/owner_programs.py $(BUILD)/continuum $(BUILD)/continuum-setup-test
@@ -78,9 +79,12 @@ owner-check: $(BUILD)/continuum $(BUILD)/continuum-setup-test
 service-check: $(BUILD)/continuum $(BUILD)/continuum-service-test
 	python3 tests/service_cli.py $(BUILD)/continuum $(BUILD)/continuum-service-test
 
-.PHONY: device-check
+.PHONY: device-check measure-check
 device-check: $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
 	python3 tests/commission_cli.py $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
+
+measure-check: $(BUILD)/continuum
+	python3 tests/measure_cli.py $(BUILD)/continuum
 
 continuity-check: $(BUILD)/continuum-setup-test
 	python3 tests/continuity_cli.py $(BUILD)/continuum-setup-test
@@ -298,6 +302,7 @@ help:
 	@echo 'make setup-check   Real PTY setup/discovery/service-start acceptance; no provider calls or Keychain writes'
 	@echo 'make service-check Live host waits/resources, shutdown and authored incident/budget acceptance'
 	@echo 'make device-check  Meta-directed setup/dialogue, selected service changes, reboot consent and resident identity acceptance (authored OS/Meta boundaries)'
+	@echo 'make measure-check Idle vs loaded RTT and goodput evidence against a live endpoint; refuses a thin sample'
 	@echo 'make continuity-check Cross-process commit/resume and stale-output rejection; authored model only'
 	@echo 'make status        Build and print implementation status'
 	@echo 'make sim           Deterministic sim transcript (no network)'

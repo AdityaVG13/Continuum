@@ -4,6 +4,6 @@ c_sources = ["../native/goose_bridge.c", "../native/setup_bridge.c",
              "../native/router_web.cpp", "../native/meta_web.cpp",
              "../native/discovery.cpp", "../native/terminal.cpp",
              "../native/continuity.cpp", "../native/service.cpp", "../native/program.cpp", "../native/host_macos.cpp",
-             "../native/leap_bridge.c", "../native/asus_web.cpp", "../native/commission_ssh.cpp"];
+             "../native/leap_bridge.c", "../native/asus_web.cpp", "../native/commission_ssh.cpp", "../native/probe.cpp"];
 c_libs_macos = ["c++"];
 c_libs_linux = ["stdc++"];

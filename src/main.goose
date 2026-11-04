@@ -15,6 +15,7 @@ import .service;
 import .device;
 import .device_agent;
 import .takeover;
+import .measure;
 import os;
 
 // The status entrypoint reports each module's implementation state. Calling
@@ -298,6 +299,9 @@ fn main() {
     if argv.len == 2 && argv[1] == "--takeover-run" {
         exit(continuum::takeover_cli(continuum::setup_directory()));
     }
+    if argv.len == 4 && argv[1] == "--measure" {
+        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3]));
+    }
     if argv.len == 3 && argv[1] == "--device-mode" {
         let refused = continuum::device_set_mode(continuum::setup_directory(), argv[2]);
         if refused.len > 0 { print("DEVICE_REFUSED ", refused); exit(1); }
@@ -388,6 +392,7 @@ fn main() {
     print("       continuum --device-status | --device-step inspect | authorize | setup [--execute] | restore --execute | reboot --execute");
     print("       continuum --device-mode observer | advisor | operator | takeover (takeover needs a passed drill)");
     print("       continuum --takeover-drill (runs the loop, proves revocation, writes the artifact)");
+    print("       continuum --measure host:port/path /loadpath (idle vs loaded RTT, goodput, sample-counted evidence)");
     print("       continuum --talk <message> (selected-device conversation; never grants reboot permission)");
     print("       continuum --owner-policy | --owner-policy-set <json> (owner only; never a Meta tool)");
     print("       continuum --program-install <json> | --program-prune");

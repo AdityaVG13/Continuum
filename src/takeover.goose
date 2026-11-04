@@ -81,10 +81,11 @@ fn takeover_apply(d: DeviceState, directory: const u8[:], id: const u8[:]) -> u8
     payload.append(id); payload.append("\"]}");
     let applied = takeover_execute(d, directory, "apply", payload);
     var failure: u8[>..] = [];
-    if applied.ok { return failure; }
-    let reason = receipt_reason(applied.receipt);
-    if reason.len > 0 { return reason; }
-    failure.append("apply_refused");
+    if !applied.ok {
+        let reason = receipt_reason(applied.receipt);
+        if reason.len > 0 { failure.append(reason); }
+        else { failure.append("apply_refused"); }
+    }
     return failure;
 }
 
