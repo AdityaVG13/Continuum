@@ -39,3 +39,27 @@ Scope: syntax, sim behavior, contract enforcement and the two manual
 probes above. No live Meta call, real-router mutation, measured
 Internet performance or hackathon result is claimed here. Synthetic
 fixtures are designed inputs, never recorded provider output.
+
+2026-11-02 supervised controller/workload integration (local macOS fallback)
+DSR command:
+/opt/homebrew/bin/bash /Users/aditya/.local/bin/dsr quality --tool continuum --work-dir /Users/aditya/Developer/Continuum
+DSR exit 4: continuum is not configured; no DSR checks ran.
+Captured DSR output: .build/integration-dsr.log
+
+Local command:
+env -u MODEL_API_KEY -u META_API_KEY make check status sim daemon native-check meta-check transport-check web-e2e-run router-cli meta-live GOOSE=/Users/aditya/Developer/Continuum/.build/toolchain/goose-v2026.3-macos-arm64/goose
+Exit 0. Log: .build/integration-integration.log
+Shared session: model-requested HTTP apply, actual receipt replay, authored
+audit response under the intervention, seeded-finding validation, exact
+non-default baseline restoration. Malformed audit and provider failure
+also restore. Emitted JSON: .build/supervised-record.json (recorded_responses,
+synthetic observations, real loopback HTTP actuation; not a live Meta run).
+Credential-environment and competing-lease mutants both fail their named
+regressions; the fixed sources pass again after mutation removal.
+
+Broad suite retains a failure: golden Meta request mismatch, expected 5418
+bytes, actual 5869; its nine-tool fixture is stale against the six-tool
+allowlist. Builder and tools are unchanged from HEAD. No golden update.
+All nine binaries were executed: eight pass, golden fails.
+Log: .build/integration-suites.log
+No key, provider calls or physical-router changes in this verification.

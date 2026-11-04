@@ -1,10 +1,10 @@
-// Host backend check (C++): drives native/host_macos.cpp -- keychain
-// vault roundtrip, staged-secret generation with reuse, interface IP,
-// and the rejoin already-associated fast path. Never churns a real
-// Wi-Fi association: rejoin is exercised only where it returns before
-// spawning networksetup (loopback in-prefix) or against a nonexistent
-// interface. Keychain items live under continuum.test.<pid>.* and are
-// deleted afterwards. macOS only; elsewhere it reports a skip.
+// Host backend check (C++): keychain vault roundtrip, staged-secret
+// generation/reuse, interface IP and rejection of phantom Wi-Fi joins.
+// --rejoin-check substitutes only the OS-command boundary: real children
+// check private stdin delivery and DHCP evidence without joining Wi-Fi.
+// Other rejoin probes use loopback or a nonexistent interface. Test-owned
+// Keychain items use continuum.test.<pid>.* and are removed afterwards.
+// macOS only; elsewhere it reports a skip.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,7 +13,46 @@
 #include "continuum_native.h"
 
 #if defined(__APPLE__)
+#include <dlfcn.h>
+#include <spawn.h>
 #include <unistd.h>
+#include <vector>
+
+// Substitute only the OS command boundary. The real host adapter still owns
+// vault reads, child pipes, exit handling and interpretation of lease evidence.
+static bool rejoin_fixture = false;
+static std::string fixture_ssid;
+extern "C" int posix_spawn(pid_t *pid, const char *path,
+                           const posix_spawn_file_actions_t *actions,
+                           const posix_spawnattr_t *attrs,
+                           char *const argv[], char *const envp[]) {
+    using Spawn = decltype(&posix_spawn);
+    static auto spawn = reinterpret_cast<Spawn>(dlsym(RTLD_NEXT, "posix_spawn"));
+    if (!spawn) return 1;
+    if (!rejoin_fixture || (std::strcmp(path, "/usr/sbin/networksetup") != 0 &&
+                            std::strcmp(path, "/usr/sbin/ipconfig") != 0))
+        return spawn(pid, path, actions, attrs, argv, envp);
+    std::string script = "";
+    if (std::strcmp(path, "/usr/sbin/ipconfig") == 0) {
+        script = fixture_ssid == "StaleAlias_5G"
+                     ? "print('yiaddr = 10.0.0.99')"
+                     : "print('yiaddr = 127.0.0.1')";
+    } else if (argv[1] && std::strcmp(argv[1], "-setairportnetwork") == 0) {
+        fixture_ssid = argv[3];
+        script = "import sys; p='fixture-only-password'; "
+                 "ok=sys.argv[-1]=='-' and p not in sys.argv and "
+                 "sys.stdin.buffer.read()==(p+'\\n').encode(); "
+                 "print('joined' if ok else 'Failed private password delivery'); "
+                 "sys.exit(0 if ok else 17)";
+    } else {
+        script = "pass";
+    }
+    std::vector<char *> child = {const_cast<char *>("/usr/bin/python3"),
+                                const_cast<char *>("-c"), script.data()};
+    for (size_t i = 1; argv[i]; i++) child.push_back(argv[i]);
+    child.push_back(nullptr);
+    return spawn(pid, "/usr/bin/python3", actions, attrs, child.data(), envp);
+}
 
 static int failures = 0;
 static void check(bool cond, const char *label) {
@@ -53,7 +92,33 @@ static bool all_alnum(const std::string &s) {
     return !s.empty();
 }
 
-int main() {
+static int rejoin_check() {
+    rejoin_fixture = true;
+    std::string ref = "continuum.test." + std::to_string((long)getpid()) + ".rejoin";
+    const std::string password = "fixture-only-password";
+    ct_bytes r{reinterpret_cast<const uint8_t *>(ref.data()), (int64_t)ref.size()};
+    ct_bytes v{reinterpret_cast<const uint8_t *>(password.data()), (int64_t)password.size()};
+    check(ct_vault_store(r, v) == CT_OK, "private fixture credential stored");
+    int32_t rc = 0;
+    std::string req = "{\"interface\":\"lo0\",\"ssid\":\"StaleAlias_5G\","
+                      "\"psk_ref\":\"" + ref + "\",\"prefix\":\"127.\",\"wait_sec\":0}";
+    std::string rec = call(ct_host_rejoin, req, rc);
+    check(rc == CT_REJECTED && rec.find("\"joined\":false") != std::string::npos,
+          "an existing alias does not prove a join when DHCP is on another network");
+    req = "{\"interface\":\"lo0\",\"ssid\":\"FreshFixture_5G\","
+          "\"psk_ref\":\"" + ref + "\",\"prefix\":\"127.\",\"wait_sec\":0}";
+    rec = call(ct_host_rejoin, req, rc);
+    check(rc == CT_OK && rec.find("\"joined\":true") != std::string::npos &&
+              rec.find("\"already\":false") != std::string::npos,
+          "a real child accepts the password privately on stdin and a matching lease");
+    check(ct_vault_delete(r) == CT_OK, "only this test's credential removed");
+    std::printf(failures == 0 ? "HOST_REJOIN_ALL_GREEN\n" : "HOST_REJOIN_RED\n");
+    return failures == 0 ? 0 : 1;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--rejoin-check") == 0)
+        return rejoin_check();
     std::string base = "continuum.test." +
                        std::to_string((long)getpid());
     std::string admin_ref = base + ".admin";
@@ -123,16 +188,14 @@ int main() {
     check(rc == CT_OK && rec.find("\"ip\":\"\"") != std::string::npos,
           "missing interface reports empty ip");
 
-    // Rejoin fast path: already holding an in-prefix lease returns
-    // before any networksetup churn.
+    // A loopback address is not evidence of a Wi-Fi association or DHCP lease.
     rec = call(ct_host_rejoin,
                "{\"interface\":\"lo0\",\"ssid\":\"Whatever_5G\","
                "\"psk_ref\":\"\",\"prefix\":\"127.\",\"wait_sec\":1}",
                rc);
-    check(rc == CT_OK &&
-              rec.find("\"joined\":true") != std::string::npos &&
-              rec.find("\"already\":true") != std::string::npos,
-          "in-prefix rejoin is a no-op success");
+    check(rc == CT_REJECTED &&
+              rec.find("\"joined\":false") != std::string::npos,
+          "loopback address alone cannot establish a Wi-Fi join");
 
     // Rejoin against a nonexistent interface fails as REJECTED with a
     // receipt, never a phantom join.

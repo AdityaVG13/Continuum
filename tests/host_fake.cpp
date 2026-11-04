@@ -3,9 +3,9 @@
 // and writes it through whichever ct_vault_* backend is linked (the
 // env vault in test links), so native/asus_web.cpp resolves the same
 // secrets by ref -- the values still never enter Goose or a receipt.
-// Rejoin always reports a clean not-joined; iface_ip reports no
-// address, which run_leap treats as "no bind hint" (loopback needs
-// none). Production links native/host_macos.cpp instead; never both.
+// Rejoin defaults to not-joined; the commissioning recovery fixture can
+// explicitly enable a loopback join. iface_ip reports no address. Production
+// links native/host_macos.cpp instead; never both.
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -129,6 +129,10 @@ int32_t ct_host_stage(ct_bytes req, ct_output out, int64_t *out_len) {
 
 int32_t ct_host_rejoin(ct_bytes, ct_output out, int64_t *out_len) {
     if (!out_len || !out.data) return CT_INVALID_ARGUMENT;
+    const char *joined = std::getenv("CT_TEST_REJOIN");
+    if (joined && std::strcmp(joined, "1") == 0)
+        return put_receipt(out, out_len,
+            "{\"joined\":true,\"already\":false,\"ip\":\"127.0.0.1\"}");
     int32_t rc = put_receipt(out, out_len,
                              "{\"joined\":false,\"already\":false,\"ip\":\"\"}");
     return rc == CT_OK ? CT_REJECTED : rc;

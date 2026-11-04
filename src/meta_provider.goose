@@ -15,6 +15,11 @@ extern fn ct_meta_submit(handle: u64, request: const u8[:], request_id: u64&) ->
 extern fn ct_meta_poll(handle: u64, result: u8[:], result_len: i64&) -> i32;
 extern fn ct_meta_cancel(handle: u64, request_id: u64) -> i32;
 extern fn ct_meta_close(handle: u64) -> i32;
+extern fn ct_meta_key_available(name: const u8[:]) -> i32;
+
+fn meta_credentials_available(config: ModelConfig) -> bool {
+    return ct_meta_key_available(config.api_key_env_name) == 1;
+}
 
 // Transport ceiling: the largest provider body the adapter will copy.
 // Larger responses fail closed, never truncate.
@@ -159,8 +164,20 @@ fn request_meta(config: ModelConfig, request: ModelRequest) -> ModelResult {
         return meta_failed("meta prompt file unavailable");
     }
     var tools: u8[>..] = [];
-    if !read_file("schemas/meta-tools.json", tools) {
-        return meta_failed("meta tools file unavailable");
+    if request.role_id == "task" {
+        var schema: u8[>..] = [];
+        if !read_file("schemas/workload-result.schema.json", schema) {
+            return meta_failed("task result schema unavailable");
+        }
+        instructions.append("\nReturn exactly one JSON object matching this schema:\n");
+        instructions.append(schema);
+        tools.append("[]");
+    } else if request.role_id == "controller" {
+        if !read_file("schemas/meta-tools.json", tools) {
+            return meta_failed("meta tools file unavailable");
+        }
+    } else {
+        return meta_failed("unknown model role");
     }
     var body: u8[>..] = [];
     if !meta_request_body(config, model, instructions, request.context,

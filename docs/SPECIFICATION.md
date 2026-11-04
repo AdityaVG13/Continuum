@@ -8,6 +8,60 @@ This is the specification and implementation repository requested by the project
 
 ## 01. The product and its central claim
 
+### Owner-defined product contract
+
+**Continuum is a Meta-directed system for taking authorized stewardship of the
+owner's router and network architecture, from initial setup and commissioning
+through continuous profiling, de-bloating and optimization of the full flow.**
+The model owns investigation, planning, commissioning decisions, tool-driven
+execution and verification. A hard-coded setup sequence with Meta relegated to
+read-only assessments is not the intended product. Neither successful enrollment
+nor a monitoring-only fallback constitutes full commissioning.
+
+Meta should learn the actual architecture over time and be able to construct
+new device-specific API requests and scripts when existing operations are
+insufficient. It may develop and install narrowly useful mini-programs for
+recurring profiling and optimization, so established work can run automatically
+without a fresh model intervention each cycle. Supporting agents and programs
+must earn their resource cost; they are not permission to add another layer of
+bloat. Placement follows the discovered hardware and capabilities rather than
+assuming that every router can host the same runtime.
+
+The objective is a very lean, optimized system: identify and remove unnecessary
+bloat across the owned flow, preserve required networking and security, and
+verify the effects rather than equating fewer processes with better performance.
+Goose/C++ supplies execution mechanisms, secret isolation and independently
+enforced authority boundaries; it must not replace Meta's commissioning strategy.
+
+One-time setup may establish standing permission for ordinary, non-destructive
+operation, including internal service/process restarts through supported tools.
+Router/device **reboots**, factory resets, firmware upgrades/updates and other
+destructive actions require separate, explicit owner approval for the proposed
+action. Model-generated scripts and automatic mini-programs obey the same
+boundary; delegating an action cannot expand authority. A setup grant is never
+a reboot grant.
+
+The owner must be able to converse with Meta about requirements and timing.
+Continuum supplies shared tool execution, permission boundaries, retained device
+knowledge, detailed workflow skills and basic bounded scripts. Designing lean
+redundancy, choosing maintenance/reboot windows and developing device-specific
+strategies belongs to the owner with Meta, not hard-coded product workflows.
+A reboot scheduler or preselected redundancy architecture is not required by
+this infrastructure slice.
+
+When administrative access is missing, ask the owner privately for access. Any
+further access-recovery method must identify the owner-authorized target,
+explain the method and consequences, and obtain specific informed authorization
+before execution. Missing access is not permission to reset the device, guess
+credentials or silently select a different gateway.
+
+This is the target contract, **not a claim that these capabilities are already
+implemented**. It supersedes narrower product-role descriptions below. The
+six-tool profile loop and hackathon demonstration remain bounded implementation
+and evaluation slices, not the complete system or its completion criterion.
+
+### Original causal-loop claim
+
 **Continuum is a Meta-powered agent that understands how network conditions are affecting its work, chooses a bounded intervention, and checks whether that intervention helped the work finish correctly.**
 
 The original proposal already has a strong demonstration: create network load, observe latency under load, let a Meta model diagnose the situation and call an apply tool, show the effect, and let the agent undo its change. The upgraded design makes that loop explainable, measurable, and useful to an actual agent workload. It also defines an ambitious route toward reliable evidence delivery and durable task execution.

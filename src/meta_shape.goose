@@ -1,8 +1,7 @@
 // Item 4: the Meta adapter's pure shape. Building the request envelope,
 // validating budgets, and classifying transport failures are deterministic
-// and testable without any network; the HTTPS submit itself stays a native
-// build ticket (native/ct_meta_*), so request_meta below keeps its TODO.
-// Credentials never appear here: the native adapter reads META_API_KEY
+// and testable without any network; native/meta_web.cpp owns HTTPS.
+// Credentials never appear here: the native adapter reads MODEL_API_KEY
 // from the environment at submit time, and this module never asks for it.
 // Every error class escalates; nothing authorizes action on failure.
 import .contracts;

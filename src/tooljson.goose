@@ -157,6 +157,7 @@ fn tool_named(name: const u8[:]) -> ToolName, bool {
     if name == "propose_ruleset" {
         return ToolName.ProposeRuleset, true;
     }
+    if name == "manage_device" { return ToolName.ManageDevice, true; }
     return ToolName.ReadObservation, false;
 }
 

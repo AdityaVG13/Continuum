@@ -72,7 +72,14 @@ These are presentation prompts, not prewritten model output.
 
 ## 6. Screen and event requirements
 
-Use one compact terminal or dashboard view with task status, current observations, the latest Meta tool request, guardian result, applied profile/remaining lease, verification result and final output. The model record contains a short rationale and evidence references, not private chain-of-thought. Do not animate fabricated reasoning steps.
+Use the Continuum TUI's five sections: Overview (needs attention + first-run
+step), Network (live host evidence), Device (gates checklist), Programs
+(guarded registry actions), Resident (live phase/pid/samples/calls). The
+pinned strip shows watching + observation age, selected device, permitted
+operations, and resident state on every screen; job results render on their own
+Result screen. Read the run as it happens; do not rebuild a separate
+dashboard. The model record contains a short rationale and evidence references,
+not private chain-of-thought. Do not animate fabricated reasoning steps.
 
 Every panel has an execution-mode badge:
 

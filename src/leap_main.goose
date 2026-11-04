@@ -12,6 +12,7 @@
 // FACTORY_USER/PASS(admin/admin) ADMIN_REF/PSK_REF(derived from host)
 // BIND_ADDR(auto) CONTROL_RIDES_WIFI(1) LEAP_REJOIN(1) RADIO_WAIT_SEC(45)
 import .lib;
+import .commission;
 import std;
 import os;
 import json;
@@ -103,6 +104,13 @@ fn main() {
     cfg.rejoin = env_flag("LEAP_REJOIN", true);
     cfg.radio_wait_sec = env_i64("RADIO_WAIT_SEC", 45);
     cfg.execute = env_flag("LEAP_EXECUTE", false);
+    let commission_action = env_into("COMMISSION_ACTION", "");
+    if commission_action.len > 0 {
+        let directory = env_into("COMMISSION_DIR", "");
+        if !continuum::commission_run(cfg, commission_action, directory,
+                env_flag("COMMISSION_EXECUTE", false), env_flag("COMMISSION_APPROVE_REBOOT", false)) { exit(1); }
+        return;
+    }
     if !cfg.execute {
         print("leap: LEAP_EXECUTE not set -- dry run (discover + plan only)");
     }
@@ -113,8 +121,9 @@ fn main() {
         return;
     }
     if report.ok {
-        print("leap: LEAP_OK");
-        return;
+        print("leap: ENROLLMENT_OK; hand off commissioning decisions to Meta in continuum");
+        print("leap: INITIAL_SETUP_INCOMPLETE requires=model-directed-commissioning,network-load");
+        exit(3);
     }
     print("leap: LEAP_FAILED phase=", report.phase, " outcome=",
         continuum::leap_outcome_name(report.outcome), " reason=", report.reason);

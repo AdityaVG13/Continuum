@@ -88,6 +88,16 @@ rc=$(run_cli "$tmp/status0" status)
 got=$(cat "$tmp/status0")
 [ "$got" = "$start" ] || fail "status '$got' != router '$start'"
 
+# The model entry must not run a scripted router proof while credentials
+# are absent. No decision means no write, including a write later undone.
+set +e
+env -u MODEL_API_KEY ROUTER_HOST=127.0.0.1 ROUTER_PORT=$PORT ROUTER_PASSWORD=$PW \
+    "$BIN" --loop >"$tmp/loop-nokey" 2>"$tmp/loop-nokey.err"
+nokey=$?
+set -e
+[ "$nokey" != 0 ] || fail "model loop accepted a missing MODEL_API_KEY"
+[ "$(qos_line)" = "$start" ] || fail "unconfigured model loop mutated the router"
+
 rc=$(run_cli "$tmp/badrate" apply sqm-fair 80)
 [ "$rc" != 0 ] || fail "wrong rate was accepted"
 now=$(qos_line)

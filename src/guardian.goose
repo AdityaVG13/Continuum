@@ -40,7 +40,8 @@ fn admit_action(request: ActionRequest, observation: Observation,
     if request.scope_id != profile.scope_id || request.path_id != profile.path_id {
         return reject("request scope/path does not match profile");
     }
-    if !observation.metrics_known || observation.observation_id == "" {
+    if request.kind != ActionKind.RestoreProfile
+            && (!observation.metrics_known || observation.observation_id == "") {
         return reject("no usable evidence behind this request");
     }
     if request.route_epoch != observation.route_epoch

@@ -25,7 +25,8 @@ fn read_fixture(path: const u8[:]) -> u8[>..] {
 }
 
 fn main() {
-    let iters: i64 = 2000;
+    let argv = args();
+    let iters: i64 = if argv.len > 1 && argv[1] == "--profile" { 500000 } else { 20000 };
 
     let good_apply = str("{\"tool\":\"apply_profile\",\"arguments\":{",
         "\"request_id\":\"req-1\",\"scope_id\":\"lab-sim\",\"path_id\":\"sim0\",",
@@ -120,5 +121,24 @@ fn main() {
         " ns_per_call=", meta_ns / iters, " ok=", ok_count);
     check(ok_count == iters, "meta all iters accepted");
 
+    // Primary workload: the SAME shape + fact validation used before durable
+    // commit and after resume. Manifest/policy reads are outside this CPU clock.
+    let manifest = read_fixture("fixtures/corpus/manifest.json");
+    let requirements = read_fixture("fixtures/corpus/expected-findings.json");
+    check(continuum::validate_audit_findings(hold_text, manifest, requirements).ok,
+        "bench audit facts accept");
+    ok_count = 0;
+    t0 = clock_ns();
+    i = 0;
+    while i < iters {
+        let shape = continuum::validate_workload_result(hold_text, "run-example", "release-audit-example", 2);
+        let facts = continuum::validate_audit_findings(hold_text, manifest, requirements);
+        if shape.ok && facts.ok { ok_count += 1; }
+        i += 1;
+    }
+    t1 = clock_ns();
+    print("bench accepted_audit iters=", iters, " wall_ns=", t1 - t0,
+        " ns_per_call=", (t1 - t0) / iters, " ok=", ok_count);
+    check(ok_count == iters, "audit shape and facts accept every timed result");
     print("BENCH_ALL_GREEN");
 }

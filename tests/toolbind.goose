@@ -170,12 +170,49 @@ fn main() {
     check(!continuum::validate_workload_result(bare_ready, "run-example",
         "release-audit-example", 2).ok, "evidence-free ready rejected");
 
+    // Task completion requires a provider result and substantive validation,
+    // not the old canned JSON or a substring containing "hold".
+    let audit_context = continuum::TaskContext {
+        run_id: "run-example", step_id: "release-audit-example", revision: 2,
+        validation_profile: "release-readiness", at_safe_boundary: true,
+    };
+    let nonsense = continuum::TaskResult {
+        outcome: continuum::Outcome { status: continuum::Status.Completed },
+        output: "hold deployment: this is not a result object",
+    };
+    check(!continuum::validate_task_result(audit_context, nonsense).independently_validated,
+        "task validator rejects non-JSON even when it contains hold");
+    let unavailable = continuum::run_meta_task(audit_context, continuum::ModelConfig {
+        base_url: "https://api.meta.ai/v1", controller_model: "muse-wonder-1.0",
+        task_model: "muse-wonder-1.0", api_key_env_name: "CONTINUUM_DEFINITELY_ABSENT_KEY",
+        request_timeout_ms: 1000, max_output_tokens: 2048, max_tool_rounds: 4,
+    });
+    check(unavailable.outcome.status == continuum::Status.Failed && unavailable.output.len == 0,
+        "task without a provider credential never fabricates a result");
+    let authored = continuum::TaskResult {
+        outcome: continuum::Outcome { status: continuum::Status.Completed },
+        output: read_fixture("fixtures/workload-hold.example.json"),
+    };
+    let accepted = continuum::validate_task_result(audit_context, authored);
+    check(accepted.independently_validated && !accepted.committed,
+        "valid audit passes without claiming an unwritten durable commit");
+    let missing_blockers = continuum::TaskResult {
+        outcome: continuum::Outcome { status: continuum::Status.Completed },
+        output: str("{\"schema_version\":\"1.0\",\"run_id\":\"run-example\",",
+            "\"task_id\":\"release-audit-example\",\"task_revision\":2,",
+            "\"decision\":\"hold\",\"findings\":[{\"finding_id\":\"REL-404\",",
+            "\"severity\":\"blocker\",\"summary\":\"an invented blocker\",",
+            "\"evidence_ids\":[\"ci-summary:v1\"]}],\"missing_evidence_ids\":[],\"summary\":\"hold\"}"),
+    };
+    check(!continuum::validate_task_result(audit_context, missing_blockers).independently_validated,
+        "well-shaped hold without required evidence-backed findings is rejected");
+
     // --- item 4: Meta request shape (no network; fixtures only) ---
     let cfg = continuum::ModelConfig {
         base_url: "https://api.meta.ai/v1",
         controller_model: "controller-candidate",
         task_model: "task-candidate",
-        api_key_env_name: "META_API_KEY",
+        api_key_env_name: "MODEL_API_KEY",
         request_timeout_ms: 30000,
         max_output_tokens: 2048,
         max_tool_rounds: 4,

@@ -669,6 +669,12 @@ std::string qos_json() {
 
 void handle(int fd, const Request &rq) {
     const std::string &path = rq.path;
+    if (rq.method == "GET" && path == "/backup.CFG") {
+        if (!asus_authed(rq)) { text(fd, 200, "<html>Main_Login.asp</html>"); return; }
+        // Opaque, explicitly synthetic vendor-backup fixture; no credentials.
+        respond(fd, 200, "HDR2virtual-router-configuration", "application/octet-stream");
+        return;
+    }
     if (rq.method == "GET" && path == "/appGet.cgi") {
         asus_appget(fd, rq);
         return;

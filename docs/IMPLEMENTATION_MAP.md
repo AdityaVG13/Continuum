@@ -8,17 +8,47 @@ This file connects the specification to concrete source modules. It is a build h
 | --- | --- | --- | --- |
 | `src/contracts.goose` | Typed internal records and enums | Version dispatch and remaining cross-field runtime checks | Valid/invalid schema fixtures map correctly; absence is distinct from a measured zero |
 | `src/meta_provider.goose` | Request/continuation builders, typed response parsing, curl-child HTTPS adapter, call correlation | Live round trip, bounded retry/cancellation polish | Real configured model responds; request identity and actual model ID recorded; tool output returns to its originating `call_id`; no synthetic response substituted |
-| `src/controller.goose` | Participant loop: labelled cases, recorded-reply dispatch, live Meta entry | A keyed run whose tool calls are the model's, with receipts fed back | Recorded apply and abstain already differ; a live call is not a scripted profile |
+| `src/controller.goose`, `src/control_session.goose` | One selected simulator/loopback HTTP backend, controller receipt replay, protected Meta task, exact-baseline exit restoration and JSON run record | Keyed run, live telemetry and independent HTTP watchdog before physical actuation | Recorded success, malformed task output and provider failure preserve the exact baseline; a live call is not a scripted profile |
 | `src/telemetry.goose` | Sim-backed `read_observation` and explicit missing-result record | Live timestamped path, gateway and application measurements | Controlled load appears in the correct path; missing samples remain unknown; route changes invalidate baselines |
 | `src/guardian.goose` | Fail-closed `admit_action` (sim scope) | Deterministic authorization, evidence, revision and lease checks against live state | Stale, out-of-scope, duplicate/conflicting and excessive requests are rejected before mutation |
 | `src/actuator.goose` | Sim-backed `apply_profile`, `restore_profile`, `read_action_result`, watchdog contract; WebApi transport behind the same signatures | SSH/tc backends, out-of-process watchdog | Apply, readback, explicit restore and crash/expiry restoration observed on the dedicated lab path |
-| `src/task_runner.goose` | Meta task/validator/checkpoint signatures plus workload-result validation | Real Meta workload plus independent acceptance of its output | Meaningful model output passes a pinned validator; invalid or missing evidence cannot advance progress |
+| `src/task_runner.goose`, `src/continuity.goose`, `native/continuity.cpp` | Evidence-backed Meta audit with separate context/tools, seeded-finding validation, private immutable output commit after cleanup, and exact-input cross-process revalidation | Keyed execution, unfinished-step recovery with effect reconciliation, and additional workloads | Invalid/stale output cannot commit or resume; a recovered completed result needs no provider call and replays no intervention |
 | `src/events.goose` | Event record and `append_event` with file sink | Redacted view feed | Model-call provenance, admitted action, queue readback, observed recovery and validation appear as distinct events |
 | `src/transport.goose` | Optional exact-object transfer contract | Owned-link reliable baseline, then bounded RaptorQ experiment | Exact authenticated object accepted before deadline under a matched wire budget; no unsupported claims about Meta's HTTPS leg |
 | `src/onboarding.goose` | Control-channel planner: discovered paths to strategy (`SurvivingPath` / staged `SameLinkLeap` / `NoPath`), staged-credential admissibility, post-leap outcome classification | OS path discovery and rejoin execution behind the native boundary; live Class B prototype per `docs/ONBOARDING_AND_STEWARDSHIP.md` section 7 | Scenario catalogue green in `tests/foundation.goose`; live leap rejoins and verifies, or the miss is recorded |
 | `native/continuum_native.h` | C ABI with router and Meta backends | SSH/tc and object-transfer adapters | ABI layout, lifetime, cancellation and error mapping proven on target platform |
 | `native/continuum_native_stub.cpp` | Explicit `CT_NOT_IMPLEMENTED` functions | Replace one adapter at a time after its gate | Adapter-specific integration tests; stubs cannot silently return success |
 | `native/fallback_main.cpp` | C++ status entrypoint | C++ host only if Goose integration gate requires it | Same model/tool contracts and workload acceptance criteria as Goose |
+
+## Owner-directed device infrastructure
+
+`src/setup.goose` owns the TUI composition: five numbered sections (Overview,
+Network, Device, Programs, Resident) plus a pinned strip (watching + age,
+selected device, permitted operations, resident phase/pid) and a Result
+screen. `setup_resident_status()` is the single parser for
+`service/status.json` behind both the strip and the Resident section; the
+Programs section drives read/disable/enable/reconcile through the same guarded
+registry tools as the CLI and the resident. `native/terminal.cpp` owns the
+renderer: pinned header/footer, word-aware wrapping, CSI parsing so arrow and
+PgUp/PgDn keys never act as section digits, masked/secret input, and child-job
+cancellation.
+
+`src/device_agent.goose` owns one selected-device model conversation and
+`device_dispatch`, used by both setup/owner dialogue and `src/service.goose`.
+`src/device.goose` owns the binding, standing permission, bounded architecture
+note and previous exchange. `schemas/device-tools.json` defines the separate
+physical-device capability surface; `prompts/device.md` and on-demand
+`prompts/workflows/` describe how Meta should use it, not fixed commissioning
+policy. Native primitives in `native/asus_commission.h` and
+`native/commission_ssh.cpp` retain identity, backup, readback and rollback guards.
+
+`manage_device` supports workflow reading, inspect/enroll, runtime profiling,
+model-selected optional-service changes, restore/verify and non-secret memory.
+A model reboot request returns an approval-required receipt even after setup
+permission. The owner's separate TUI/CLI reboot operation supplies explicit
+native consent. Reset/firmware replacement and arbitrary script/HTTP execution
+are not exposed. General program deployment, reboot scheduling and a prescribed
+redundancy design are not implemented here.
 
 ## Core tool dispatch
 
@@ -29,9 +59,9 @@ The external tool definitions live in `schemas/meta-tools.json`. Their implement
 | `read_observation` | `telemetry.goose::read_observation` | Read-only scoped measurements |
 | `read_task_context` | `task_runner.goose::read_task_context` | Read-only deadline, work and validation requirements |
 | `list_profiles` | `controller.goose::list_profiles` | Read-only server-owned allowlist |
-| `apply_profile` | `guardian.goose::admit_action`, then `actuator.goose::apply_profile` | Bounded owned-profile mutation after admission |
-| `read_action_result` | `actuator.goose::read_action_result` | Read actual action state and verification evidence |
-| `restore_profile` | `guardian.goose::admit_action`, then `actuator.goose::restore_profile` | Restore the matching owned lease/revision |
+| `apply_profile` | `dispatch_controller_tool` → guardian → selected sim actuator or `control_session.goose::dispatch_web_apply` | Bounded owned-profile mutation after admission |
+| `read_action_result` | Selected sim receipt or `control_session.goose::dispatch_web_result` | Read actual action state and verification evidence |
+| `restore_profile` | Guardian → selected sim restore or `control_session.goose::dispatch_web_restore` | Restore the matching owned lease/revision |
 
 The model determines whether to request an action. The guardian decides whether the request is admissible. The actuator performs an admitted change and reports actual state. The independent watchdog restores expired owned state even if the controller or provider is unavailable. These responsibilities must remain distinct as implementation fills in behind them.
 
@@ -46,7 +76,7 @@ The Goose structs deliberately represent **internal** records, not wire serializ
 - `Observation.metrics_known=false` is explicit absence. The all-zero constructor is an unset placeholder, not a healthy observation.
 - `TaskResult.independently_validated=false` and `committed=false` stay false until independent validation passes. HTTP success, generated text and a recovered object are each insufficient to commit task progress.
 - Wire enum strings must be mapped explicitly. The internal `Status` enum is an internal detail and is not serialized by ordinal.
-- Session timestamps are monotonic milliseconds, not portable wall-clock checkpoints. Durable recovery needs a separate restart/epoch design.
+- Session timestamps are monotonic milliseconds, not portable wall-clock checkpoints. Completed-output recovery binds exact task/evidence/prompt/schema/model bytes and revalidates without replaying leases; unfinished-step or live-lease recovery still needs a restart/epoch and effect-reconciliation design.
 
 ## Source TODO labels
 

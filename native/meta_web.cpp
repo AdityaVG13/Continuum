@@ -23,7 +23,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
+#include <utility>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -32,6 +34,15 @@ namespace {
 
 const long kMaxBytes = 32768;
 const int kShellTimeoutPadSec = 5;
+// Goose calls this synchronous boundary on one thread. Handles and pending
+// envelopes belong to this process; setup and the resident service cannot
+// overwrite each other's state. Each open retains at most one capped response.
+struct Session {
+    std::string config, payload;
+    uint64_t request_id = 0;
+    int status = 0;
+};
+std::map<ct_handle, Session> sessions;
 
 bool json_str(const std::string &body, const char *key, std::string &out,
               size_t cap) {
@@ -125,6 +136,17 @@ std::string read_file_capped(const char *path, long cap) {
 
 extern "C" {
 
+int32_t ct_meta_key_available(ct_bytes name) {
+    if (!name.data || name.len <= 0 || name.len > 64) return 0;
+    std::string env(reinterpret_cast<const char *>(name.data), (size_t)name.len);
+    for (unsigned char c : env) {
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_')) return 0;
+    }
+    const char *key = std::getenv(env.c_str());
+    return key && *key ? 1 : 0;
+}
+
 int32_t ct_meta_open(ct_bytes config_json, ct_handle *out_handle) {
     if (!out_handle || !config_json.data || config_json.len <= 0 ||
         config_json.len > 4096)
@@ -142,21 +164,11 @@ int32_t ct_meta_open(ct_bytes config_json, ct_handle *out_handle) {
     if (!json_long(cfg, "max_bytes", max_bytes) || max_bytes <= 0 ||
         max_bytes > kMaxBytes)
         return CT_INVALID_ARGUMENT;
-    // No secret is read here: submit reads the live environment so a
-    // rotated key takes effect on the next request, not the next open.
-    // The open config (credential source NAME, base URL, budgets - never
-    // a secret) is staged for submit under this handle.
+    // The credential itself is still resolved only at submit time.
     static uint64_t next_handle = 1;
-    char cfg_path[64];
-    std::snprintf(cfg_path, sizeof cfg_path, "/tmp/ct_meta_cfg_%llu",
-                  (unsigned long long)(next_handle));
-    FILE *cf = std::fopen(cfg_path, "wb");
-    if (!cf) return CT_FAILED;
-    fchmod(fileno(cf), 0600);
-    std::fwrite(cfg.data(), 1, cfg.size(), cf);
-    std::fclose(cf);
+    if (sessions.size() >= 8 || next_handle == 0) return CT_REJECTED;
     *out_handle = next_handle++;
-    if (*out_handle == 0) *out_handle = next_handle++;
+    sessions.emplace(*out_handle, Session{std::move(cfg), "", 0, 0});
     return CT_OK;
 }
 
@@ -203,12 +215,10 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     std::string body_json = req.substr(bs, be - bs + 1);
     if ((long)body_json.size() > kMaxBytes) return CT_INVALID_ARGUMENT;
 
-    // Open validated these shapes and staged the non-secret config under
-    // this handle; submit re-reads it (a stale handle fails closed here).
-    char cfg_path[64];
-    std::snprintf(cfg_path, sizeof cfg_path, "/tmp/ct_meta_cfg_%llu",
-                  (unsigned long long)handle);
-    std::string cfg = read_file_capped(cfg_path, 4096);
+    const auto session = sessions.find(handle);
+    if (session == sessions.end()) return CT_INVALID_ARGUMENT;
+    if (session->second.request_id != 0) return CT_PENDING;
+    const std::string &cfg = session->second.config;
     std::string key_env, base;
     long timeout_ms = 0, max_bytes = kMaxBytes;
     if (cfg.empty() || !json_str(cfg, "api_key_env", key_env, 64) ||
@@ -220,9 +230,13 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     const char *key = std::getenv(key_env.c_str());
     if (!key || !*key) return CT_INVALID_ARGUMENT;
 
-    char body_path[] = "/tmp/ct_meta_body_XXXXXX";
-    char hdr_path[] = "/tmp/ct_meta_hdr_XXXXXX";
-    char rsp_path[] = "/tmp/ct_meta_rsp_XXXXXX";
+    const char *scratch = std::getenv("TMPDIR");
+    if (!scratch || scratch[0] != '/') scratch = "/tmp";
+    if (std::strlen(scratch) > 4000) return CT_INVALID_ARGUMENT;
+    char body_path[4096], hdr_path[4096], rsp_path[4096];
+    std::snprintf(body_path, sizeof body_path, "%s/ct_meta_body_XXXXXX", scratch);
+    std::snprintf(hdr_path, sizeof hdr_path, "%s/ct_meta_hdr_XXXXXX", scratch);
+    std::snprintf(rsp_path, sizeof rsp_path, "%s/ct_meta_rsp_XXXXXX", scratch);
     int bfd = mkstemp(body_path);
     int hfd = mkstemp(hdr_path);
     int rfd = mkstemp(rsp_path);
@@ -257,15 +271,14 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     std::string auth = std::string("Authorization: Bearer ") + key + "\n";
     std::fwrite(auth.data(), 1, auth.size(), hf);
     std::fclose(hf);
-    // Scrub the key from memory as soon as the header file holds it.
-    volatile char *kscrub = (volatile char *)key;
-    for (size_t i = 0; i < std::strlen(key); i++) kscrub[i] = 0;
+    // getenv storage belongs to the process. Scrub only our owned copy:
+    // changing the environment here destroys the next turn's credential.
     std::memset(&auth[0], 0, auth.size());
 
     long secs = timeout_ms / 1000 + kShellTimeoutPadSec;
     if (secs < 6) secs = 6;
     std::string url = base + path;
-    std::string cmd = "curl -sS --max-time " + std::to_string(secs) +
+    std::string cmd = "curl -sS -A 'OpenAI File Downloader, XaiImageApiFetch/1.0' --max-time " + std::to_string(secs) +
                       " --max-filesize " + std::to_string(max_bytes) +
                       " -o " + sh_quote(rsp_path) + " -X POST " +
                       sh_quote(url) + " -H 'Content-Type: application/json'" +
@@ -296,41 +309,12 @@ int32_t ct_meta_submit(ct_handle handle, ct_bytes request_json,
     *out_request_id = next_req++;
     if (*out_request_id == 0) *out_request_id = next_req++;
 
-    // Stage the response body keyed by request id for poll, plus the
-    // handle->request map poll uses to find it. A curl failure with no
-    // body stages status 0: transport failure, never data.
-    char stage[64];
-    std::snprintf(stage, sizeof stage, "/tmp/ct_meta_resp_%llu",
-                  (unsigned long long)*out_request_id);
-    {
-        std::string payload = read_file_capped(rsp_path, max_bytes);
-        unlink(rsp_path);
-        if (payload.empty() && (st != 0 || code == 0)) {
-            code = 0;
-        }
-        FILE *sf = std::fopen(stage, "wb");
-        if (!sf) return CT_FAILED;
-        fchmod(fileno(sf), 0600);
-        std::fwrite(payload.data(), 1, payload.size(), sf);
-        std::fclose(sf);
-        char stg2[96];
-        std::snprintf(stg2, sizeof stg2, "%s.status", stage);
-        FILE *cf = std::fopen(stg2, "wb");
-        if (cf) {
-            fchmod(fileno(cf), 0600);
-            std::fprintf(cf, "%d", code);
-            std::fclose(cf);
-        }
-        char map_path[64];
-        std::snprintf(map_path, sizeof map_path, "/tmp/ct_meta_last_%llu",
-                      (unsigned long long)handle);
-        FILE *mf = std::fopen(map_path, "wb");
-        if (mf) {
-            fchmod(fileno(mf), 0600);
-            std::fprintf(mf, "%llu", (unsigned long long)*out_request_id);
-            std::fclose(mf);
-        }
-    }
+    std::string payload = read_file_capped(rsp_path, max_bytes);
+    unlink(rsp_path);
+    if (payload.empty() && (st != 0 || code == 0)) code = 0;
+    session->second.request_id = *out_request_id;
+    session->second.status = code;
+    session->second.payload = std::move(payload);
     return CT_OK;
 }
 
@@ -339,66 +323,34 @@ int32_t ct_meta_poll(ct_handle handle, ct_output result_json,
     if (handle == 0 || !result_json.data || result_json.capacity <= 0 ||
         !out_length)
         return CT_INVALID_ARGUMENT;
-    // Poll drains the staged response for this handle's latest request.
-    // The Goose side submits exactly one request per handle, so the map
-    // file stamped by submit is the matching one; anything else is a bug,
-    // not data.
-    int32_t rc = CT_FAILED;
-    char map_path[64];
-    std::snprintf(map_path, sizeof map_path, "/tmp/ct_meta_last_%llu",
-                  (unsigned long long)handle);
-    std::string last = read_file_capped(map_path, 32);
-    if (last.empty()) return CT_INVALID_ARGUMENT;
-    unsigned long long req = std::strtoull(last.c_str(), nullptr, 10);
-    if (req == 0) return CT_INVALID_ARGUMENT;
-    char stage[64], stg2[96];
-    std::snprintf(stage, sizeof stage, "/tmp/ct_meta_resp_%llu", req);
-    std::snprintf(stg2, sizeof stg2, "%s.status", stage);
-    std::string status_s = read_file_capped(stg2, 16);
-    std::string payload = read_file_capped(stage, kMaxBytes + 1);
-    unlink(stage);
-    unlink(stg2);
-    unlink(map_path);
-    if (!status_s.empty() && payload.size() > (size_t)kMaxBytes) {
-        // Paranoia: cap check already enforced at download.
-        return CT_BUFFER_TOO_SMALL;
-    }
-    long code = status_s.empty() ? 0 : std::atol(status_s.c_str());
-    std::string env = "{\"status\":" + std::to_string(code) + ",\"body\":";
-    if (code == 200 && !payload.empty()) {
-        env += payload;
-    } else {
-        env += "null";
-    }
+    *out_length = 0;
+    const auto session = sessions.find(handle);
+    if (session == sessions.end() || session->second.request_id == 0) return CT_INVALID_ARGUMENT;
+    const auto &pending = session->second;
+    std::string env = "{\"status\":" + std::to_string(pending.status) + ",\"body\":";
+    if (pending.status == 200 && !pending.payload.empty()) env += pending.payload;
+    else env += "null";
     env += ",\"error\":\"\"}";
+    int32_t rc = CT_FAILED;
     put_envelope(result_json, out_length, rc, env);
+    if (rc == CT_OK) {
+        session->second.request_id = 0;
+        session->second.payload.clear();
+    }
     return rc;
 }
 
 int32_t ct_meta_cancel(ct_handle handle, uint64_t request_id) {
-    if (handle == 0 || request_id == 0) return CT_INVALID_ARGUMENT;
-    char stage[64], stg2[96], map_path[64];
-    std::snprintf(stage, sizeof stage, "/tmp/ct_meta_resp_%llu",
-                  (unsigned long long)request_id);
-    std::snprintf(stg2, sizeof stg2, "%s.status", stage);
-    std::snprintf(map_path, sizeof map_path, "/tmp/ct_meta_last_%llu",
-                  (unsigned long long)handle);
-    unlink(stage);
-    unlink(stg2);
-    unlink(map_path);
+    const auto session = sessions.find(handle);
+    if (request_id == 0 || session == sessions.end() || session->second.request_id != request_id)
+        return CT_INVALID_ARGUMENT;
+    session->second.request_id = 0;
+    session->second.payload.clear();
     return CT_OK;
 }
 
 int32_t ct_meta_close(ct_handle handle) {
-    if (handle == 0) return CT_INVALID_ARGUMENT;
-    char cfg_path[64], map_path[64];
-    std::snprintf(cfg_path, sizeof cfg_path, "/tmp/ct_meta_cfg_%llu",
-                  (unsigned long long)handle);
-    std::snprintf(map_path, sizeof map_path, "/tmp/ct_meta_last_%llu",
-                  (unsigned long long)handle);
-    unlink(cfg_path);
-    unlink(map_path);
-    return CT_OK;
+    return sessions.erase(handle) == 1 ? CT_OK : CT_INVALID_ARGUMENT;
 }
 
 }  // extern "C"

@@ -46,8 +46,13 @@ int32_t ct_vault_fetch(ct_bytes ref, ct_output secret, int64_t *out_len) {
     return CT_OK;
 }
 
+int32_t ct_vault_fetch_quiet(ct_bytes ref, ct_output secret, int64_t *out_len) {
+    // This modeled vault never invokes a UI; both read contracts are identical.
+    return ct_vault_fetch(ref, secret, out_len);
+}
+
 int32_t ct_vault_store(ct_bytes ref, ct_bytes secret) {
-    if (!secret.data || secret.len <= 0 || secret.len > 256)
+    if (!secret.data || secret.len <= 0 || secret.len > 4096)
         return CT_INVALID_ARGUMENT;
     std::string name;
     if (!env_name(ref, name)) return CT_INVALID_ARGUMENT;

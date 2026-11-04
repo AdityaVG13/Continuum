@@ -33,10 +33,10 @@ static std::string call(int32_t (*fn)(ct_bytes, ct_output, int64_t *),
     return std::string(reinterpret_cast<char *>(receipt), (size_t)out_len);
 }
 
-static std::string base(const char *host, int port) {
-    char b[256];
-    std::snprintf(b, sizeof b, "{\"host\":\"%s\",\"port\":%d,\"bind_addr\":\"\"",
-                  host, port);
+static std::string base(const char *host, int port, const char *bind = "") {
+    char b[512];
+    std::snprintf(b, sizeof b, "{\"host\":\"%s\",\"port\":%d,\"bind_addr\":\"%s\"",
+                  host, port, bind);
     return b;
 }
 
@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
     check(rc == CT_FAILED, "unreachable router fails closed");
 
     // Discovery: factory unit, three open bands, password cap known.
-    std::string dreq = base(host, port) +
+    std::string dreq = base(host, port, host) +
         ",\"factory_user\":\"admin\",\"factory_pass\":\"admin\"}";
     std::string d = call(ct_asus_discover, dreq, rc);
     check(rc == CT_OK, "discover returns CT_OK");
@@ -74,6 +74,20 @@ int main(int argc, char **argv) {
     check(has(d, session ? "\"session_first\":true"
                          : "\"session_first\":false"),
           "discover names the access branch");
+
+    // A missing management path must not turn into an OS-selected route.
+    // All probes still name the loopback double, never a physical device.
+    for (const char *bind : {"0.0.0.0", "192.0.2.123"}) {
+        const std::string unsafe = base(host, port, bind) +
+            ",\"factory_user\":\"admin\",\"factory_pass\":\"admin\"}";
+        call(ct_asus_discover, unsafe, rc);
+        check(rc == CT_INVALID_ARGUMENT,
+              "unspecified or unassigned source refused before default routing");
+    }
+    const std::string alias = base("localhost", port) +
+        ",\"factory_user\":\"admin\",\"factory_pass\":\"admin\"}";
+    call(ct_asus_discover, alias, rc);
+    check(rc == CT_INVALID_ARGUMENT, "management target must be a literal address, not a DNS alias");
 
     // The staged credential must NOT authenticate before rotation.
     std::string vreq = base(host, port) +

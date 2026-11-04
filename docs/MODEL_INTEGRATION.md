@@ -41,7 +41,7 @@ The supplied tool definitions use `strict: false` and full local schema validati
 
 ## 5. Application loop
 
-Against the simulator this loop is implemented. `run_participant` drives it from recorded replies so a missing key cannot hide a substituted profile. `run_participant_live` is the same dispatch with `request_meta` and `submit_tool_result`. `--loop` uses the live entry only when `MODEL_API_KEY` is set. The steps below are the contract that entry has to keep.
+The shared session dispatches model requests to either the simulator or an explicitly selected loopback HTTP router. `run_participant` / `run_participant_live` retain the controller-only test seam; `--loop` uses `run_protected_task` to execute the Meta audit workload under the admitted intervention, validate its result, and verify exit restoration. The task receives its evidence and result schema, not the controller's mutation tools or validator answer file. Recorded responses exercise this same runtime without calling Meta; a keyed run remains pending. Live telemetry and independent HTTP crash recovery are still absent, so physical targets remain closed. The numbered steps below include stronger live-system requirements, not claims that every requirement is already implemented.
 
 1. Build a controller context from current observations, task contract, calibrated profiles and active lease. Include model role, request identity, session clock and deadline.
 2. Submit one bounded request to Meta. The C++ HTTPS adapter copies any bytes it retains; Goose owns protocol meaning and admission state.
@@ -57,6 +57,13 @@ A model's observation reference may become old during inference. The proposed 15
 ## 6. Budgets and failure policy
 
 `config/meta.example.json` proposes a 10-second controller request deadline, 2,048 output tokens, ten incident turns and one controller request in flight. The workload gets a separate 30-second request deadline and 4,096 output-token cap. These are provisional design values, not measurements or provider guarantees. Meta counts internal reasoning within the output-token budget; calibrate the cap rather than assuming every token is visible text. [Reasoning](https://dev.meta.ai/docs/reasoning)
+
+The current CLI instead explicitly uses 30-second requests, a 2,048-token
+output cap and four controller tool rounds, followed by one task request
+using that same request/token configuration. The roles have separate contexts
+and configurable model IDs, but separate per-role budget configuration is
+not implemented. These limits bound a supervised attempt, not its usefulness
+or provider billing.
 
 | Failure | Required response |
 | --- | --- |

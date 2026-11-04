@@ -1,0 +1,19 @@
+[
+  {
+    "type": "function", "name": "manage_device",
+    "description": "Use the execution_target from current context: the selected device, or local for owner-authorized host programs without a selected device. Read policy/workflow skills; install isolated local logic or guarded action sequences. Device effects require the selected authenticated device and owner policy. Never grant authority through model text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "candidate_id": {"type": "string", "maxLength": 64},
+        "operation": {"type": "string", "enum": ["read_skill", "read_policy", "inspect", "enroll", "runtime", "apply", "restore", "verify", "reboot", "remember", "install_program", "list_programs", "read_program", "run_program", "disable_program", "enable_program", "reconcile_program", "prune_programs"]},
+        "payload": {"type": "string", "maxLength": 2048, "description": "read_skill: commissioning/optimization/programs. remember: replacement non-secret note. apply: JSON object of five required booleans enable_samba, enable_ftp, dms_enable, daapd_enable, enable_webdav; true disables, false preserves. install_program: JSON spec {id,purpose,interval_ms,steps,source}; read programs workflow for execution/isolation limits. read/run/disable/enable/reconcile_program: installed program id. read_policy/list_programs/prune_programs and other operations require an empty string."}
+      },
+      "required": ["candidate_id", "operation", "payload"], "additionalProperties": false
+    }, "strict": true
+  },
+  {
+    "type": "function", "name": "inspect_system", "description": "Fresh protected inventory of the owner-selected device only.",
+    "parameters": {"type": "object", "properties": {"candidate_id": {"type": "string", "maxLength": 64}}, "required": ["candidate_id"], "additionalProperties": false}, "strict": true
+  }
+]

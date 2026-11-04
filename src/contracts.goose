@@ -5,10 +5,10 @@ namespace continuum;
 
 enum Status { NotImplemented, Accepted, Rejected, Pending, Completed, Failed }
 enum Provenance { Unset, Synthetic, Recorded, Live }
-enum ToolName { ReadObservation, ReadTaskContext, ListProfiles, ApplyProfile, ReadActionResult, RestoreProfile, DiscoverTopology, InspectSystem, ProposeRuleset }
+enum ToolName { ReadObservation, ReadTaskContext, ListProfiles, ApplyProfile, ReadActionResult, RestoreProfile, DiscoverTopology, InspectSystem, ProposeRuleset, ManageDevice }
 enum ControllerPhase { Unconfigured, Observing, AwaitingMeta, Admitting, Applying, Verifying, Restoring, Paused, Failed }
 enum ActionKind { ApplyProfile, RestoreProfile }
-enum TaskPhase { Unconfigured, Pending, Running, AwaitingValidation, Committed, Failed }
+enum TaskPhase { Unconfigured, Pending, Running, AwaitingValidation, Validated, Committed, Failed }
 // How a router can be reached. Sim is the test-environment backend; WebApi is
 // a stock admin HTTP API; Ssh is a shell (tc/OpenWrt class); Serial is the
 // bench recovery path. A profile is useless until `discovered` is true.
@@ -153,6 +153,8 @@ struct TaskResult {
     output: u8[..8192] = "",
     independently_validated: bool = false,
     committed: bool = false,
+    provenance: Provenance = Provenance.Unset,
+    provider_model_id: u8[..128] = "",
 }
 
 struct Event {

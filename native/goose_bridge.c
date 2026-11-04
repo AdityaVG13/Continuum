@@ -24,10 +24,10 @@ typedef struct {
     int64_t len;
 } gs_slice_u8;
 
-_Static_assert(sizeof(gs_slice_u8) == sizeof(ct_bytes),
+CT_STATIC_ASSERT(sizeof(gs_slice_u8) == sizeof(ct_bytes),
                "goose slice layout drifted from ct_bytes");
-_Static_assert(sizeof(gs_slice_u8) == 16, "slice must be ptr+len");
-_Static_assert(sizeof(int64_t) == 8, "goose i64 must be 8 bytes");
+CT_STATIC_ASSERT(sizeof(gs_slice_u8) == 16, "slice must be ptr+len");
+CT_STATIC_ASSERT(sizeof(int64_t) == 8, "goose i64 must be 8 bytes");
 
 // One reframe for every JSON-in/JSON-out entry point: validate the
 // slices, then call through. The ct_* targets share the exact signature.

@@ -8,3 +8,5 @@ internal/
 lab/
 AGENTS.md
 .asgrep/
+benchmarks/
+docs/progress/

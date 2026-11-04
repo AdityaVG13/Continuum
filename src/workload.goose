@@ -30,6 +30,25 @@ fn bad_verdict(reason: const u8[:]) -> WorkloadVerdict {
     return WorkloadVerdict { ok: false, reason: reason };
 }
 
+fn json_array(node: json::Node?) -> bool {
+    if !node { return false; }
+    match node.val {
+        Arr => { return true; },
+        _ => { return false; },
+    }
+}
+
+fn json_string_list_has(node: json::Node?, value: const u8[:]) -> bool {
+    if !node || !json_array(node) { return false; }
+    var item = node.first;
+    while item {
+        let text, ok = json::as_string(item);
+        if ok && text == value { return true; }
+        item .= item.next;
+    }
+    return false;
+}
+
 fn has_sub(text: const u8[:], sub: const u8[:]) -> bool {
     if sub.len <= 0 || sub.len > text.len {
         return false;
@@ -67,18 +86,10 @@ fn summary_clean(summary: const u8[:]) -> bool {
     return true;
 }
 
-// Is evidence_id listed in the corpus manifest text the caller read from
-// fixtures/corpus/manifest.json? Pattern plus listing, not a hash check.
-fn evidence_doc_listed(manifest_text: const u8[:], evidence_id: const u8[:]) -> bool {
-    if manifest_text.len <= 0 || manifest_text.len > 8192 {
-        return false;
-    }
-    var doc: json::Node[>..] = [];
-    var decoded: u8[>..] = [];
-    let root, err = json::parse(manifest_text, doc, decoded);
-    if !root {
-        return false;
-    }
+// Borrow the current validation's manifest DOM. All citations share one
+// parse, without retaining evidence across calls or weakening source checks.
+fn evidence_doc_listed(root: json::Node?, evidence_id: const u8[:]) -> bool {
+    if !root { return false; }
     let docs = json::member(root, "documents");
     if !docs {
         return false;
@@ -143,8 +154,8 @@ fn validate_workload_result(text: const u8[:], run_id: const u8[:],
     }
     // Findings: each fully shaped, severities counted, evidence ids sane.
     let findings = json::member(root, "findings");
-    if !findings {
-        return bad_verdict("findings missing");
+    if !findings || !json_array(findings) {
+        return bad_verdict("findings must be an array");
     }
     var seen_count: i64 = 0;
     var blockers: i64 = 0;
@@ -170,8 +181,8 @@ fn validate_workload_result(text: const u8[:], run_id: const u8[:],
             return bad_verdict("finding summary missing or over 512");
         }
         let ev = json::member(c, "evidence_ids");
-        if !ev {
-            return bad_verdict("finding lacks evidence ids");
+        if !ev || !json_array(ev) {
+            return bad_verdict("finding evidence ids must be an array");
         }
         var ev_count: i64 = 0;
         var e = ev.first;
@@ -193,8 +204,8 @@ fn validate_workload_result(text: const u8[:], run_id: const u8[:],
     }
     // Missing evidence: list shape only; non-empty is enforced per decision.
     let missing = json::member(root, "missing_evidence_ids");
-    if !missing {
-        return bad_verdict("missing_evidence_ids missing");
+    if !missing || !json_array(missing) {
+        return bad_verdict("missing_evidence_ids must be an array");
     }
     var missing_count: i64 = 0;
     var m = missing.first;
@@ -220,4 +231,77 @@ fn validate_workload_result(text: const u8[:], run_id: const u8[:],
         return bad_verdict("ready with blockers or vacuous");
     }
     return WorkloadVerdict { ok: true, decision: decision, blockers: blockers };
+}
+
+// Corpus-specific independent checks. The expected finding ids, severities
+// and required source bindings are validator input, never part of the model
+// prompt. Free-form prose is not a generally machine-proven semantic claim.
+fn validate_audit_findings(text: const u8[:], manifest: const u8[:], requirements: const u8[:]) -> WorkloadVerdict {
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(text, doc, decoded);
+    var rules_doc: json::Node[>..] = [];
+    var rules_dec: u8[>..] = [];
+    let rules, rules_err = json::parse(requirements, rules_doc, rules_dec);
+    if !root || !rules { return bad_verdict("audit result or validation facts unavailable"); }
+    let decision, has_decision = json::as_string(json::member(root, "decision"));
+    let expected, has_expected = json::as_string(json::member(rules, "expected_decision"));
+    if !has_decision || !has_expected || decision != expected {
+        return bad_verdict("audit decision does not match supplied evidence");
+    }
+    let findings = json::member(root, "findings");
+    let required = json::member(rules, "required_findings");
+    if !findings || !required || !json_array(findings) || !json_array(required) || !required.first {
+        return bad_verdict("audit findings or required facts unavailable");
+    }
+    var manifest_doc: json::Node[>..] = [];
+    var manifest_dec: u8[>..] = [];
+    let bounded_manifest = if manifest.len > 0 && manifest.len <= 8192 { manifest } else { "" };
+    let manifest_root, manifest_err = json::parse(bounded_manifest, manifest_doc, manifest_dec);
+    var finding = findings.first;
+    while finding {
+        let known: const u8[:][4] = ["finding_id", "severity", "summary", "evidence_ids"];
+        if !no_unknown(finding, known) { return bad_verdict("unknown finding field"); }
+        let evidence = json::member(finding, "evidence_ids");
+        if !evidence || !json_array(evidence) { return bad_verdict("finding evidence must be an array"); }
+        var citation = evidence.first;
+        while citation {
+            let id, ok = json::as_string(citation);
+            if !ok || !evidence_doc_listed(manifest_root, id) {
+                return bad_verdict("finding cites evidence not supplied to the task");
+            }
+            citation .= citation.next;
+        }
+        finding .= finding.next;
+    }
+    var needed = required.first;
+    while needed {
+        let id, has_id = json::as_string(json::member(needed, "finding_id"));
+        let severity, has_severity = json::as_string(json::member(needed, "severity"));
+        let sources = json::member(needed, "required_evidence_ids");
+        if !has_id || !has_severity || !sources || !json_array(sources) { return bad_verdict("required audit fact malformed"); }
+        var matches: i64 = 0;
+        finding .= findings.first;
+        while finding {
+            let actual, has_actual = json::as_string(json::member(finding, "finding_id"));
+            if has_actual && actual == id {
+                matches += 1;
+                let got_severity, has_got = json::as_string(json::member(finding, "severity"));
+                if !has_got || got_severity != severity { return bad_verdict("required finding severity changed"); }
+                let evidence = json::member(finding, "evidence_ids");
+                var source = sources.first;
+                while source {
+                    let source_id, has_source = json::as_string(source);
+                    if !has_source || !json_string_list_has(evidence, source_id) {
+                        return bad_verdict("required finding lacks its supporting source binding");
+                    }
+                    source .= source.next;
+                }
+            }
+            finding .= finding.next;
+        }
+        if matches != 1 { return bad_verdict("required audit finding missing or duplicated"); }
+        needed .= needed.next;
+    }
+    return WorkloadVerdict { ok: true, decision: decision };
 }

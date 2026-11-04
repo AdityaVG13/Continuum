@@ -6,6 +6,7 @@ import .guardian;
 import .actuator;
 import .policy;
 import .router_web;
+import .control_session;
 import .meta_provider;
 import .tooljson;
 import .meta_shape;
@@ -18,6 +19,7 @@ struct ProfileListResult { outcome: Outcome = Outcome {}, profiles: ActionProfil
 // The sim catalogue answers for the lab-sim scope; every other scope gets
 // an empty list, never an error masquerading as profiles.
 fn list_profiles(scope_id: const u8[:]) -> ProfileListResult {
+    if web_controller.enabled { return web_controller_profiles(scope_id); }
     if scope_id != "lab-sim" {
         return ProfileListResult {
             outcome: Outcome { status: Status.Completed, message: "no profiles for scope" },
@@ -327,6 +329,7 @@ fn tool_label(tool: ToolName) -> const u8[:] {
     if tool == ToolName.DiscoverTopology { return "discover_topology"; }
     if tool == ToolName.InspectSystem { return "inspect_system"; }
     if tool == ToolName.ProposeRuleset { return "propose_ruleset"; }
+    if tool == ToolName.ManageDevice { return "manage_device"; }
     return "unknown";
 }
 
@@ -413,6 +416,8 @@ fn mutation_body(status_word: const u8[:], receipt: ActionReceipt,
     body.append(bool_word(receipt.applied));
     body.append(",\"restored\":");
     body.append(bool_word(receipt.restored));
+    body.append(",\"revision\":");
+    json::format_int(body, receipt.observed_revision);
     body.append("}");
     return body;
 }
@@ -664,6 +669,30 @@ fn dispatch_sim_tool(envelope: const u8[:], run_id: const u8[:]) -> ToolDispatch
     return dispatch_restore(envelope, run_id);
 }
 
+// The recorded and live model entries share this dispatcher. A backend
+// failure never falls back to simulated execution.
+fn dispatch_controller_tool(envelope: const u8[:], run_id: const u8[:]) -> ToolDispatch {
+    if !web_controller.enabled { return dispatch_sim_tool(envelope, run_id); }
+    if run_id != web_controller.run_id || run_id.len == 0 {
+        return web_dispatch_failure(Status.Rejected, "run does not own this router session");
+    }
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(envelope, doc, decoded);
+    if !root { return web_dispatch_failure(Status.Rejected, "envelope is not JSON"); }
+    let tool, known = json::as_string(json::member(root, "tool"));
+    if !known || !six_tool(tool) { return web_dispatch_failure(Status.Rejected, "tool is not one of the six"); }
+    if tool == "apply_profile" { return dispatch_web_apply(envelope, run_id); }
+    if tool == "restore_profile" { return dispatch_web_restore(envelope, run_id); }
+    if tool == "read_action_result" { return dispatch_web_result(envelope); }
+    let expected = if tool == "read_observation" { ToolName.ReadObservation }
+        else if tool == "read_task_context" { ToolName.ReadTaskContext } else { ToolName.ListProfiles };
+    var read = dispatch_read(envelope, expected, run_id);
+    read.simulated = false;
+    read.profile_id = controller_current_profile();
+    return read;
+}
+
 fn loop_step(report: SimLoopReport&, step: ToolDispatch) -> bool {
     if step.outcome.status != Status.Completed {
         report.outcome = step.outcome;
@@ -757,7 +786,9 @@ fn participant_context(run_id: const u8[:]) -> u8[>..] {
         return ctx;
     }
     let listed = list_profiles("lab-sim");
-    ctx.append("{\"simulated\":true,\"run_id\":");
+    ctx.append("{\"observation_provenance\":\"synthetic\",\"actuator\":");
+    json::format_string(ctx, if web_controller.enabled { "router-http-lab" } else { "sim" });
+    ctx.append(",\"run_id\":");
     json::format_string(ctx, run_id);
     ctx.append(",\"observation\":");
     ctx.append(observation_body(obs.observation));
@@ -815,116 +846,210 @@ fn participant_take() -> ModelResult, bool {
 struct ParticipantReport {
     outcome: Outcome = Outcome {},
     scripted: bool = false,
+    session_started: bool = false,
     model_calls: i64 = 0,
     applied: bool = false,
     abstained: bool = false,
     receipt_replayed: bool = false,
     profile_after: u8[..64] = "",
     rounds: i64 = 0,
+    restored: bool = false,
+    replay_json: u8[..32768] = "",
+    run_id: u8[..64] = "",
+    task: TaskResult = TaskResult {},
+    task_model_calls: i64 = 0,
+    task_profile: u8[..64] = "",
+    checkpoint_path: u8[..1024] = "",
+    resumed: bool = false,
+}
+
+// A caller can persist this record; producing it alone is not a durable
+// checkpoint. Recorded responses, synthetic evidence and HTTP actuation
+// remain separate facts even when they participate in the same run.
+fn session_record(report: ParticipantReport) -> u8[>..] {
+    var out: u8[>..] = [];
+    out.append("{\"schema_version\":\"1.0\",\"run_id\":");
+    json::format_string(out, report.run_id);
+    out.append(",\"status\":");
+    json::format_string(out, status_name(report.outcome.status));
+    out.append(",\"reason\":");
+    json::format_string(out, report.outcome.message);
+    out.append(",\"model_source\":");
+    json::format_string(out, if report.resumed { "committed_artifact" }
+        else if report.scripted { "recorded_responses" } else { "meta_provider" });
+    out.append(",\"observation_provenance\":");
+    json::format_string(out, if report.resumed { "none" } else { "synthetic" });
+    out.append(",\"actuator\":");
+    json::format_string(out, if report.resumed { "none" }
+        else if web_controller.enabled { "router-http-lab" } else { "sim" });
+    out.append(",\"controller_model_calls\":");
+    json::format_int(out, report.model_calls);
+    out.append(",\"task_model_calls\":");
+    json::format_int(out, report.task_model_calls);
+    out.append(",\"applied\":");
+    json::format_bool(out, report.applied);
+    out.append(",\"restored\":");
+    json::format_bool(out, report.restored);
+    out.append(",\"profile_during_task\":");
+    json::format_string(out, report.task_profile);
+    out.append(",\"profile_after\":");
+    json::format_string(out, report.profile_after);
+    out.append(",\"task_validated\":");
+    json::format_bool(out, report.task.independently_validated);
+    out.append(",\"task_committed\":");
+    json::format_bool(out, report.task.committed);
+    out.append(",\"resumed\":"); json::format_bool(out, report.resumed);
+    out.append(",\"checkpoint_path\":"); json::format_string(out, report.checkpoint_path);
+    out.append(",\"task_provenance\":");
+    json::format_string(out, if report.task.provenance == Provenance.Live { "live" }
+        else if report.task.provenance == Provenance.Recorded { "recorded" }
+        else if report.task.provenance == Provenance.Synthetic { "synthetic" } else { "unset" });
+    out.append(",\"task_model_id\":");
+    json::format_string(out, report.task.provider_model_id);
+    out.append(",\"task_result\":");
+    out.append(if report.task.independently_validated { report.task.output } else { "null" });
+    out.append(",\"controller_replay\":");
+    out.append(if report.replay_json.len > 0 { report.replay_json } else { "[]" });
+    out.append("}");
+    return out;
 }
 
 fn participant_done(report: ParticipantReport, status: Status, message: const u8[:]) -> ParticipantReport {
     var out = report;
-    out.profile_after = sim_current_profile_id();
     out.outcome = Outcome { status: status, message: message };
+    if report.session_started && web_controller.enabled && web_controller.active && web_controller.run_id == report.run_id {
+        let cleanup = restore_web_owned("controller-exit");
+        if cleanup.outcome.status != Status.Completed {
+            out.outcome = cleanup.outcome;
+        } else if cleanup.verified {
+            out.restored = true;
+        }
+    }
+    out.profile_after = controller_current_profile();
     return out;
 }
 
-// Recorded replies exercise the same dispatch the live command uses. A
-// missing reply ends the script; it is not an abstain, and it is not an
-// apply. This function does not call the model. The live command is in
-// main, so a test run does not link the HTTPS adapter.
+// Recorded and live runs share the exact session, dispatch and cleanup.
+// Only the source of model responses differs; recorded mode never calls
+// the provider. A replay is not evidence of a live provider decision.
 fn run_participant(run_id: const u8[:], case_name: const u8[:],
         config: ModelConfig, scripted: bool) -> ParticipantReport {
-    var report = ParticipantReport { scripted: true };
     if !scripted {
-        return participant_done(report, Status.Failed, "participant: recorded entry only");
+        return ParticipantReport {
+            outcome: Outcome { status: Status.Failed, message: "participant: recorded entry only" },
+            scripted: true,
+        };
     }
-    if run_id.len == 0 {
-        return participant_done(report, Status.Failed, "participant: run_id required");
-    }
-    if config.max_tool_rounds < 1 || config.max_tool_rounds > 8 {
-        return participant_done(report, Status.Failed, "participant: tool round cap invalid");
-    }
-    if !arm_case(case_name) {
-        return participant_done(report, Status.Failed, "participant: unknown case");
-    }
-    let ctx = participant_context(run_id);
-    var sent_input: u8[>..] = [];
-    if !opening_input(ctx, sent_input) {
-        return participant_done(report, Status.Failed, "participant: context invalid");
-    }
-    reply_i = 0;
-    while true {
-        if report.rounds >= config.max_tool_rounds {
-            return participant_done(report, Status.Completed, "participant budget");
-        }
-        let got, ok = participant_take();
-        if !ok {
-            if report.model_calls == 0 {
-                return participant_done(report, Status.Failed, "participant: no recorded reply");
-            }
-            return participant_done(report, Status.Completed, "recorded replies ended");
-        }
-        if got.outcome.status != Status.Completed {
-            report.outcome = got.outcome;
-            report.profile_after = sim_current_profile_id();
-            return report;
-        }
-        report.rounds += 1;
-        report.model_calls += 1;
-        if !got.has_tool_call {
-            report.abstained = true;
-            return participant_done(report, Status.Completed, "participant abstained");
-        }
-        let dispatched = dispatch_sim_tool(tool_envelope(got.tool, got.arguments_json), run_id);
-        if got.tool == ToolName.ApplyProfile && dispatched.verified {
-            report.applied = true;
-        }
-        var folded: u8[>..] = [];
-        if meta_replay_input(sent_input, got.raw_output_json, got.call_id, dispatched.result_json, folded) {
-            report.receipt_replayed = true;
-            sent_input = [];
-            sent_input.append(folded);
-        }
-    }
-    return participant_done(report, Status.Failed, "participant: loop ended");
+    return run_participant_session(run_id, case_name, config, true, false);
 }
 
-// Live entry. The model sees the case, calls tools, and gets each receipt
-// back. This function does not name a profile. It is not called by the
-// recorded-reply tests.
 fn run_participant_live(run_id: const u8[:], case_name: const u8[:],
         config: ModelConfig) -> ParticipantReport {
-    var report = ParticipantReport {};
-    if run_id.len == 0 {
-        return participant_done(report, Status.Failed, "participant: run_id required");
+    return run_participant_session(run_id, case_name, config, false, false);
+}
+
+fn run_protected_task(run_id: const u8[:], case_name: const u8[:],
+        config: ModelConfig, recorded: bool) -> ParticipantReport {
+    return run_participant_session(run_id, case_name, config, recorded, true);
+}
+
+fn run_participant_session(run_id: const u8[:], case_name: const u8[:],
+        config: ModelConfig, scripted: bool, with_task: bool) -> ParticipantReport {
+    var report = ParticipantReport { scripted: scripted, run_id: run_id };
+    var task_context = TaskContext {};
+    var task_input = TaskInput {};
+    var owns_task = false;
+
+    // Keep a successful intervention active through workload execution and
+    // validation. Provider failure and rejected output take the SAME exit.
+    fn finish(status: Status, message: const u8[:]) -> ParticipantReport {
+        var out = report;
+        var final_status = status;
+        var final_message: u8[..256] = message;
+        if status == Status.Completed && with_task && owns_task {
+            out.task_profile = controller_current_profile();
+            out.task_model_calls = 1;
+            if scripted {
+                let response, ok = participant_take();
+                if ok {
+                    out.task = task_from_model(task_context, task_input, response);
+                } else {
+                    out.task = task_failed(Status.Failed, "recorded workload response unavailable");
+                }
+            } else {
+                out.task = run_prepared_meta_task(task_context, config, task_input);
+            }
+            final_status = out.task.outcome.status;
+            final_message = out.task.outcome.message;
+        }
+        out = participant_done(out, final_status, final_message);
+        if with_task && owns_task && !web_controller.enabled && active_lease.active {
+            // Host-owned cleanup of a previously admitted sim lease, not a
+            // new model action. The actuator still checks lease identity.
+            let restored = restore_profile(ActionRequest {
+                request_id: "controller-exit", lease_id: active_lease.lease_id,
+            }, Admission { action_id: "controller-exit", admitted: true });
+            if !restored.verification_complete {
+                out.outcome = restored.outcome;
+            } else {
+                out.restored = true;
+            }
+            out.profile_after = controller_current_profile();
+        }
+        if owns_task { active_task = TaskContext {}; }
+        return out;
+    }
+
+    if !valid_id(run_id, 59) {
+        return finish(Status.Failed, "participant: run_id invalid (1..59 bytes)");
     }
     if config.max_tool_rounds < 1 || config.max_tool_rounds > 8 {
-        return participant_done(report, Status.Failed, "participant: tool round cap invalid");
+        return finish(Status.Failed, "participant: tool round cap invalid");
     }
-    if config.controller_model.len == 0 || config.base_url.len == 0 {
-        return participant_done(report, Status.Failed, "controller: model/config required");
+    if !scripted && !build_meta_request(config, run_id, run_id).ok {
+        return finish(Status.Failed, "controller: model/config required");
     }
+    if active_task.run_id.len > 0 {
+        return finish(Status.Failed, "another task session is active");
+    }
+    if !controller_begin(run_id) {
+        return finish(Status.Failed, "participant: backend unavailable or lease unresolved");
+    }
+    report.session_started = true;
     if !arm_case(case_name) {
-        return participant_done(report, Status.Failed, "participant: unknown case");
+        return finish(Status.Failed, "participant: unknown case");
+    }
+    if with_task {
+        task_context = release_task_context(run_id);
+        task_input = prepare_task_input(task_context);
+        if !task_input.ok { return finish(Status.Failed, "workload inputs unavailable"); }
+        active_task = task_context;
+        owns_task = true;
     }
     let ctx = participant_context(run_id);
     var sent_input: u8[>..] = [];
     if !opening_input(ctx, sent_input) {
-        return participant_done(report, Status.Failed, "participant: context invalid");
+        return finish(Status.Failed, "participant: context invalid");
     }
     var next_input: u8[>..] = [];
     var held_output: u8[>..] = [];
     var held_receipt: u8[>..] = [];
     var held_response: u8[>..] = [];
     var held_call: u8[>..] = [];
+    reply_i = 0;
     while true {
         if report.rounds >= config.max_tool_rounds {
-            return participant_done(report, Status.Completed, "participant budget");
+            return finish(Status.Completed, "participant budget");
         }
         var mres = ModelResult {};
-        if report.rounds == 0 {
+        if scripted {
+            let recorded, ok = participant_take();
+            if !ok {
+                if report.model_calls == 0 { return finish(Status.Failed, "participant: no recorded reply"); }
+                return finish(Status.Completed, "recorded replies ended");
+            }
+            mres = recorded;
+        } else if report.rounds == 0 {
             var mreq = ModelRequest {};
             mreq.request_id = run_id;
             mreq.run_id = run_id;
@@ -939,28 +1064,34 @@ fn run_participant_live(run_id: const u8[:], case_name: const u8[:],
             sent_input.append(next_input);
         }
         if mres.outcome.status != Status.Completed {
-            report.outcome = mres.outcome;
-            report.profile_after = sim_current_profile_id();
-            return report;
+            return finish(mres.outcome.status, mres.outcome.message);
         }
-        if mres.provenance != Provenance.Live {
-            return participant_done(report, Status.Failed, "participant model call was not live");
+        if !scripted && mres.provenance != Provenance.Live {
+            return finish(Status.Failed, "participant model call was not live");
         }
         report.rounds += 1;
         report.model_calls += 1;
         if !mres.has_tool_call {
-            report.abstained = true;
-            return participant_done(report, Status.Completed, "participant abstained");
+            report.abstained = !report.applied;
+            return finish(Status.Completed, "participant decision complete");
         }
-        let dispatched = dispatch_sim_tool(tool_envelope(mres.tool, mres.arguments_json), run_id);
+        let dispatched = dispatch_controller_tool(tool_envelope(mres.tool, mres.arguments_json), run_id);
         if mres.tool == ToolName.ApplyProfile && dispatched.verified {
             report.applied = true;
         }
+        if mres.tool == ToolName.RestoreProfile && dispatched.verified { report.restored = true; }
         var folded: u8[>..] = [];
         if meta_replay_input(sent_input, mres.raw_output_json, mres.call_id, dispatched.result_json, folded) {
             report.receipt_replayed = true;
+            report.replay_json = folded;
             next_input = [];
             next_input.append(folded);
+            if scripted {
+                sent_input = [];
+                sent_input.append(folded);
+            }
+        } else {
+            return finish(Status.Failed, "participant: receipt replay exceeded bound or was malformed");
         }
         held_output = [];
         held_output.append(mres.raw_output_json);
@@ -971,7 +1102,7 @@ fn run_participant_live(run_id: const u8[:], case_name: const u8[:],
         held_call = [];
         held_call.append(mres.call_id);
     }
-    return participant_done(report, Status.Failed, "participant: loop ended");
+    return finish(Status.Failed, "participant: loop ended");
 }
 
 // Fail-closed probe. Empty state never reaches a model call. A configured

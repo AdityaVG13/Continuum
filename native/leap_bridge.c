@@ -20,9 +20,9 @@ typedef struct {
     int64_t len;
 } gs_slice_u8;
 
-_Static_assert(sizeof(gs_slice_u8) == sizeof(ct_bytes),
+CT_STATIC_ASSERT(sizeof(gs_slice_u8) == sizeof(ct_bytes),
                "goose slice layout drifted from ct_bytes");
-_Static_assert(sizeof(gs_slice_u8) == 16, "slice must be ptr+len");
+CT_STATIC_ASSERT(sizeof(gs_slice_u8) == 16, "slice must be ptr+len");
 
 typedef int32_t (*ct_json_fn)(ct_bytes, ct_output, int64_t *);
 
@@ -54,6 +54,11 @@ int32_t ct_asus_apply_json(gs_slice_u8 req, gs_slice_u8 receipt,
 int32_t ct_asus_verify_json(gs_slice_u8 req, gs_slice_u8 receipt,
                             int64_t *out_len) {
     return leap_bridge(ct_asus_verify, req, receipt, out_len);
+}
+
+int32_t ct_asus_commission_json(gs_slice_u8 req, gs_slice_u8 receipt,
+                               int64_t *out_len) {
+    return leap_bridge(ct_asus_commission, req, receipt, out_len);
 }
 
 int32_t ct_host_stage_json(gs_slice_u8 req, gs_slice_u8 receipt,

@@ -1,6 +1,9 @@
-// Continuum native transport for the main program root: the router HTTP
-// backend and the Meta HTTPS adapter behind the extern fns in src.
-c_sources = ["../native/goose_bridge.c", "../native/router_web.cpp",
-             "../native/meta_web.cpp"];
+// Main native boundaries. On macOS use `make tui` / `make status`: the
+// pinned sidecar cannot express Security/SystemConfiguration framework flags.
+c_sources = ["../native/goose_bridge.c", "../native/setup_bridge.c",
+             "../native/router_web.cpp", "../native/meta_web.cpp",
+             "../native/discovery.cpp", "../native/terminal.cpp",
+             "../native/continuity.cpp", "../native/service.cpp", "../native/program.cpp", "../native/host_macos.cpp",
+             "../native/leap_bridge.c", "../native/asus_web.cpp", "../native/commission_ssh.cpp"];
 c_libs_macos = ["c++"];
 c_libs_linux = ["stdc++"];

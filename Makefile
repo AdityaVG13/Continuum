@@ -1,9 +1,11 @@
 GOOSE ?= goose
 CXX ?= c++
 BUILD := .build
+HOST_OS ?= $(shell uname -s)
 export GOOSE_HOME := $(abspath $(BUILD)/goose-cache)
+GOOSE_TESTS := sim_loop sim_controller foundation toolbind metamorphic golden conformance_matrix fuzz_tooljson leap_logic
 
-.PHONY: all check status sim daemon loop loop-router router-cli test web-e2e web-e2e-run meta-live native-check cpp-status transport-check asus-check host-check leap leap-e2e help clean
+.PHONY: all check status sim daemon tui owner-check service-check setup-check continuity-check loop loop-router router-cli test web-e2e web-e2e-run meta-live meta-check native-check cpp-status transport-check asus-check host-check leap leap-e2e help clean
 
 all: help
 
@@ -13,32 +15,99 @@ $(BUILD):
 check:
 	$(GOOSE) check src/main.goose
 
-$(BUILD)/continuum: $(wildcard src/*.goose) | $(BUILD)
-	$(GOOSE) build src/main.goose --debug -o $@
+# The pinned .build sidecar cannot express Apple framework flags. Emit C
+# and use the same explicit native link as the existing leap executable.
+PLATFORM_LIBS :=
+define SIGN_BINARY
+endef
+ifeq ($(HOST_OS),Darwin)
+PLATFORM_LIBS := -framework Security -framework CoreFoundation -framework SystemConfiguration
+# Public certificate selection only; no private keys or passwords in this file.
+# Keep it local and apply it after every production link, not only once by hand.
+-include $(BUILD)/signing.mk
+MACOS_SIGN_IDENTITY ?=
+ifneq ($(strip $(MACOS_SIGN_IDENTITY)),)
+ifeq ($(strip $(MACOS_SIGN_IDENTITY)),-)
+$(error MACOS_SIGN_IDENTITY must name a certificate; ad-hoc signatures change identity on rebuild)
+endif
+define SIGN_BINARY
+	/usr/bin/codesign --force --sign "$(MACOS_SIGN_IDENTITY)" --identifier "$(1)" --timestamp=none "$(2)"
+	/usr/bin/codesign --verify --strict --verbose=2 "$(2)"
+endef
+endif
+endif
+
+.PHONY: sign signing-check
+sign:
+ifeq ($(HOST_OS),Darwin)
+	@test -n "$(MACOS_SIGN_IDENTITY)" || { printf '%s\n' 'sign: set MACOS_SIGN_IDENTITY to a certificate name or fingerprint (or use .build/signing.mk)'; exit 1; }
+	$(MAKE) $(BUILD)/continuum $(BUILD)/continuum-leap
+	$(call SIGN_BINARY,org.continuum.controller,$(BUILD)/continuum)
+	$(call SIGN_BINARY,org.continuum.leap,$(BUILD)/continuum-leap)
+else
+	@printf '%s\n' 'sign: Apple signing is not required on this platform'
+endif
+
+signing-check:
+	python3 tests/signing.py
+
+$(BUILD)/continuum.c: $(wildcard src/*.goose) src/main.build | $(BUILD)
+	$(GOOSE) -o $@ --standalone src/main.goose
+
+$(BUILD)/continuum_c.o: $(BUILD)/continuum.c
+	$(CC) -O2 -c $< -o $@
+
+DEVICE_NATIVE := native/leap_bridge.c native/asus_web.cpp
+PROGRAM_NATIVE := native/program.cpp
+$(BUILD)/continuum: $(BUILD)/continuum_c.o $(wildcard native/*.c native/*.cpp native/*.h) Makefile $(wildcard $(BUILD)/signing.mk)
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/meta_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/host_macos.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp $(PLATFORM_LIBS) -o $@
+	$(call SIGN_BINARY,org.continuum.controller,$@)
+
+tui: $(BUILD)/continuum
+	./$(BUILD)/continuum --tui
+
+$(BUILD)/continuum-setup-test: $(BUILD)/continuum_c.o tests/setup_meta.cpp $(wildcard native/*.c native/*.cpp native/*.h)
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) native/commission_ssh.cpp tests/host_fake.cpp $(PLATFORM_LIBS) -o $@
+
+$(BUILD)/continuum-service-test: $(BUILD)/continuum_c.o tests/service_host.cpp tests/setup_meta.cpp $(wildcard native/*.c native/*.cpp native/*.h)
+	$(CXX) -std=c++20 -O2 $(BUILD)/continuum_c.o native/goose_bridge.c native/setup_bridge.c native/router_web.cpp native/terminal.cpp native/continuity.cpp native/service.cpp $(PROGRAM_NATIVE) native/vault.cpp tests/service_host.cpp tests/setup_meta.cpp $(DEVICE_NATIVE) tests/commission_host.cpp tests/host_fake.cpp $(PLATFORM_LIBS) -o $@
+
+owner-check: $(BUILD)/continuum $(BUILD)/continuum-setup-test
+	python3 tests/owner_programs.py $(BUILD)/continuum $(BUILD)/continuum-setup-test
+
+service-check: $(BUILD)/continuum $(BUILD)/continuum-service-test
+	python3 tests/service_cli.py $(BUILD)/continuum $(BUILD)/continuum-service-test
+
+.PHONY: device-check
+device-check: $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
+	python3 tests/commission_cli.py $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
+
+continuity-check: $(BUILD)/continuum-setup-test
+	python3 tests/continuity_cli.py $(BUILD)/continuum-setup-test
+
+setup-check: $(BUILD)/continuum $(BUILD)/continuum-setup-test
+	python3 tests/setup_tui.py $(BUILD)/continuum
 
 status: $(BUILD)/continuum
 	./$(BUILD)/continuum --status
 
-sim:
-	$(GOOSE) run src/main.goose -- --sim
+sim: $(BUILD)/continuum
+	./$(BUILD)/continuum --sim
 
-daemon:
-	$(GOOSE) run src/main.goose -- --daemon
+daemon: $(BUILD)/continuum
+	./$(BUILD)/continuum --daemon
 
 loop: $(BUILD)/continuum
 	./$(BUILD)/continuum --loop
 
-# Same entry as `make loop`, pointed at the C++ double. The recipe
-# spawns the double and tears it down. Green only if --loop itself
-# reads the revision move and the post-restore drift.
+# Same live model/task entry as `make loop`, pointed at the C++ double.
+# Needs MODEL_API_KEY and spends bounded calls. Abstention is permitted;
+# the model's actual choice, not a scripted revision bump, drives the run.
 loop-router: $(BUILD)/continuum $(BUILD)/router_double
+	@test -n "$$MODEL_API_KEY" || { echo 'loop-router: MODEL_API_KEY required'; exit 1; }
 	@ROUTER_PASSWORD=test-only-pw $(BUILD)/router_double 18095 >/dev/null 2>&1 & pid=$$!; \
 	for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -A "OpenAI File Downloader, XaiImageApiFetch/1.0" -o /dev/null http://127.0.0.1:18095/api/status && break; sleep 1; done; \
-	ROUTER_HOST=127.0.0.1 ROUTER_PORT=18095 ROUTER_PASSWORD=test-only-pw env -u MODEL_API_KEY $(BUILD)/continuum --loop; rc=$$?; \
-	if [ $$rc = 0 ]; then \
-	  rev=$$(curl -s -A "OpenAI File Downloader, XaiImageApiFetch/1.0" http://127.0.0.1:18095/api/status | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision"])'); \
-	  if [ "$$rev" != 3 ]; then echo "LOOP_ROUTER_RED router revision $$rev, expected 3"; rc=1; else echo "LOOP_ROUTER_READBACK revision=$$rev"; fi; \
-	fi; \
+	ROUTER_HOST=127.0.0.1 ROUTER_PORT=18095 ROUTER_PASSWORD=test-only-pw $(BUILD)/continuum --loop; rc=$$?; \
 	kill $$pid 2>/dev/null; wait $$pid 2>/dev/null; exit $$rc
 
 # Operator tuner against the C++ double. status must match an independent
@@ -46,16 +115,13 @@ loop-router: $(BUILD)/continuum $(BUILD)/router_double
 router-cli: $(BUILD)/continuum $(BUILD)/router_double tests/router_cli.sh
 	@sh tests/router_cli.sh $(BUILD)/continuum $(BUILD)/router_double 18096
 
-test:
-	$(GOOSE) run tests/sim_loop.goose
-	$(GOOSE) run tests/sim_controller.goose
-	$(GOOSE) run tests/foundation.goose
-	$(GOOSE) run tests/toolbind.goose
-	$(GOOSE) run tests/metamorphic.goose
-	$(GOOSE) run tests/golden.goose
-	$(GOOSE) run tests/conformance_matrix.goose
-	$(GOOSE) run tests/fuzz_tooljson.goose
-	$(GOOSE) run tests/leap_logic.goose
+# The shared session reaches C++ at runtime even in recorded mode. Use
+# the compiler's native build route, not libtcc's unresolved C++ imports.
+$(BUILD)/test-%: tests/%.goose $(wildcard src/*.goose tests/*.build native/*.c native/*.cpp native/*.h) | $(BUILD)
+	$(GOOSE) build $< -o $@
+
+test: $(addprefix $(BUILD)/test-,$(GOOSE_TESTS))
+	@set -e; for suite in $(GOOSE_TESTS); do env -u MODEL_API_KEY ./$(BUILD)/test-$$suite; done
 
 # End-to-end: Goose loop -> C++ transport -> C++ virtual router
 # (tests/router_double.cpp, no wizard). Self-contained: the recipe
@@ -68,8 +134,8 @@ $(BUILD)/web_e2e.c: tests/router_web_e2e.goose $(wildcard src/*.goose) | $(BUILD
 $(BUILD)/web_e2e_c.o: $(BUILD)/web_e2e.c
 	$(CC) -O2 -c $< -o $@
 
-$(BUILD)/web_e2e: $(BUILD)/web_e2e_c.o native/goose_bridge.c native/router_web.cpp
-	$(CXX) -O2 $(BUILD)/web_e2e_c.o native/goose_bridge.c native/router_web.cpp -o $@
+$(BUILD)/web_e2e: $(BUILD)/web_e2e_c.o native/goose_bridge.c native/router_web.cpp native/meta_web.cpp native/continuum_native.h
+	$(CXX) -O2 $(BUILD)/web_e2e_c.o native/goose_bridge.c native/router_web.cpp native/meta_web.cpp -o $@
 
 web-e2e: $(BUILD)/web_e2e
 
@@ -88,13 +154,22 @@ $(BUILD)/meta_live: tests/meta_live.goose $(wildcard src/*.goose) | $(BUILD)
 meta-live: $(BUILD)/meta_live
 	./$(BUILD)/meta_live
 
+$(BUILD)/native_meta_check: tests/native_meta_check.cpp native/meta_web.cpp native/continuum_native.h | $(BUILD)
+	$(CXX) -std=c++20 -Wall -Wextra -Werror tests/native_meta_check.cpp native/meta_web.cpp -o $@
+
+meta-check: $(BUILD)/native_meta_check
+	./$(BUILD)/native_meta_check
+
 native-check:
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/continuum_native_stub.cpp native/fallback_main.cpp
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/meta_web.cpp
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/router_web.cpp
-	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/asus_web.cpp
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/asus_web.cpp native/commission_ssh.cpp tests/commission_host.cpp
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/vault.cpp
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/host_macos.cpp
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only native/discovery.cpp native/terminal.cpp native/continuity.cpp native/service.cpp native/program.cpp tests/setup_meta.cpp
+	$(CC) -Wall -Wextra -Werror -fsyntax-only native/setup_bridge.c
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only -x c++ native/setup_bridge.c
 	$(CC) -Wall -Wextra -Werror -fsyntax-only native/goose_bridge.c
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsyntax-only -x c++ native/goose_bridge.c
 	$(CC) -Wall -Wextra -Werror -fsyntax-only native/leap_bridge.c
@@ -127,8 +202,8 @@ $(BUILD)/router_double: tests/router_double.cpp | $(BUILD)
 
 # Self-contained: runs the ASUS ceremony harness against the C++ double
 # in both wizard branches (open, then session-first).
-$(BUILD)/native_asus_check: tests/native_asus_check.cpp native/asus_web.cpp native/vault.cpp native/continuum_native.h | $(BUILD)
-	$(CXX) -std=c++20 -Wall -Wextra -Werror -Inative tests/native_asus_check.cpp native/asus_web.cpp native/vault.cpp -o $@
+$(BUILD)/native_asus_check: tests/native_asus_check.cpp native/asus_web.cpp native/asus_commission.h native/commission_ssh.cpp native/commission_ssh.h native/vault.cpp native/continuum_native.h | $(BUILD)
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -Inative tests/native_asus_check.cpp native/asus_web.cpp native/commission_ssh.cpp native/vault.cpp -o $@
 
 asus-check: $(BUILD)/native_asus_check $(BUILD)/router_double
 	@ok=1; \
@@ -145,15 +220,16 @@ asus-check: $(BUILD)/native_asus_check $(BUILD)/router_double
 	if [ $$ok = 1 ]; then echo ASUS_CHECK_ALL_GREEN; else echo ASUS_CHECK_RED; exit 1; fi
 
 # Host backend harness (macOS): builds always, runs only with HOST_LAB=1
-# because the roundtrip writes continuum.test.<pid>.* items into the real
-# login keychain (deleted again in the run). Never joins a real network:
-# rejoin is exercised only on its no-op and no-such-interface paths.
+# because it writes test-owned login Keychain items and removes them again.
+# It never joins a real network; rejoin uses invalid interfaces or a child
+# command double that checks stdin delivery and DHCP evidence.
 $(BUILD)/native_host_check: tests/native_host_check.cpp native/host_macos.cpp native/continuum_native.h | $(BUILD)
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -Inative tests/native_host_check.cpp native/host_macos.cpp -framework Security -framework CoreFoundation -o $@
 
 host-check: $(BUILD)/native_host_check
 ifeq ($(HOST_LAB),1)
 	$(BUILD)/native_host_check
+	$(BUILD)/native_host_check --rejoin-check
 else
 	@echo 'host-check: built $(BUILD)/native_host_check; skipping live run (touches the login keychain; re-run with HOST_LAB=1).'
 endif
@@ -168,20 +244,30 @@ $(BUILD)/leap.c: src/leap_main.goose $(wildcard src/*.goose) | $(BUILD)
 $(BUILD)/leap_c.o: $(BUILD)/leap.c
 	$(CC) -O2 -c $< -o $@
 
-$(BUILD)/continuum-leap: $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/host_macos.cpp
-	$(CXX) -O2 $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/host_macos.cpp -framework Security -framework CoreFoundation -o $@
+$(BUILD)/continuum-leap: $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/asus_commission.h native/commission_ssh.cpp native/commission_ssh.h native/host_macos.cpp native/continuum_native.h Makefile $(wildcard $(BUILD)/signing.mk)
+	$(CXX) -std=c++20 -O2 $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/commission_ssh.cpp native/host_macos.cpp $(PLATFORM_LIBS) -o $@
+	$(call SIGN_BINARY,org.continuum.leap,$@)
 
 leap: $(BUILD)/continuum-leap
 	./$(BUILD)/continuum-leap
 
-# Headless leap e2e: the same Goose executor linked against the fake
-# host backend (env vault, no keychain, no Wi-Fi), driven over the
-# wired plan against the C++ double in both wizard branches. Dry run
-# must write nothing (the execute run right after still leaps), the
-# execute run must verify, and a second execute must refuse the now
-# configured unit.
-$(BUILD)/continuum-leap-test: $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/vault.cpp tests/host_fake.cpp
-	$(CXX) -O2 $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/vault.cpp tests/host_fake.cpp -o $@
+# Headless leap e2e uses the real executor with fake host/vault and the C++
+# wizard in both branches. Enrollment is a capability, not setup readiness:
+# commissioning decisions belong to Meta in the main program, not this executor.
+$(BUILD)/continuum-leap-test: $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/asus_commission.h native/commission_ssh.h native/vault.cpp tests/host_fake.cpp tests/commission_host.cpp
+	$(CXX) -std=c++20 -O2 $(BUILD)/leap_c.o native/goose_bridge.c native/leap_bridge.c native/router_web.cpp native/asus_web.cpp native/vault.cpp tests/host_fake.cpp tests/commission_host.cpp -o $@
+
+.PHONY: commission-check
+$(BUILD)/commission-ssh-check: tests/commission_ssh.cpp native/commission_ssh.cpp native/commission_ssh.h | $(BUILD)
+	$(CXX) -std=c++20 -Wall -Wextra -Werror tests/commission_ssh.cpp native/commission_ssh.cpp -o $@
+
+$(BUILD)/commission-keychain-check: tests/commission_keychain.cpp native/asus_web.cpp native/asus_commission.h native/commission_ssh.cpp native/host_macos.cpp native/continuum_native.h | $(BUILD)
+	$(CXX) -std=c++20 -Wall -Wextra -Werror tests/commission_keychain.cpp native/asus_web.cpp native/commission_ssh.cpp native/host_macos.cpp -framework Security -framework CoreFoundation -o $@
+
+commission-check: $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/commission-ssh-check $(BUILD)/commission-keychain-check
+	$(BUILD)/commission-keychain-check
+	python3 -c 'import subprocess,uuid; r=subprocess.run(["$(BUILD)/commission-ssh-check", "$(BUILD)/commission-ssh-"+uuid.uuid4().hex]); raise SystemExit(r.returncode)'
+	python3 tests/commission_cli.py $(BUILD)/continuum-leap-test $(BUILD)/router_double
 
 leap-e2e: $(BUILD)/continuum-leap-test $(BUILD)/router_double
 	@ok=1; \
@@ -191,9 +277,12 @@ leap-e2e: $(BUILD)/continuum-leap-test $(BUILD)/router_double
 	  base="ROUTER_HOST=127.0.0.1 ROUTER_PORT=18094 SSID_STEM=LeapLab CONTROL_RIDES_WIFI=0"; \
 	  env $$base $(BUILD)/continuum-leap-test > $(BUILD)/leap-e2e.log 2>&1 || ok=0; \
 	  grep -q "dry run complete" $(BUILD)/leap-e2e.log || ok=0; \
-	  env $$base LEAP_EXECUTE=1 $(BUILD)/continuum-leap-test > $(BUILD)/leap-e2e.log 2>&1 || ok=0; \
+	  env $$base LEAP_EXECUTE=1 $(BUILD)/continuum-leap-test > $(BUILD)/leap-e2e.log 2>&1; rc=$$?; \
+	  [ $$rc = 3 ] || ok=0; \
 	  grep -q "OUTCOME Verified" $(BUILD)/leap-e2e.log || ok=0; \
-	  grep -q "LEAP_OK" $(BUILD)/leap-e2e.log || ok=0; \
+	  grep -q "ENROLLMENT_OK" $(BUILD)/leap-e2e.log || ok=0; \
+	  grep -q "INITIAL_SETUP_INCOMPLETE" $(BUILD)/leap-e2e.log || ok=0; \
+	  if grep -q "LEAP_OK" $(BUILD)/leap-e2e.log; then ok=0; fi; \
 	  if env $$base LEAP_EXECUTE=1 $(BUILD)/continuum-leap-test > $(BUILD)/leap-e2e.log 2>&1; then ok=0; fi; \
 	  grep -q "LEAP_FAILED phase=discover" $(BUILD)/leap-e2e.log || ok=0; \
 	  kill $$pid 2>/dev/null; wait $$pid 2>/dev/null; \
@@ -203,11 +292,18 @@ leap-e2e: $(BUILD)/continuum-leap-test $(BUILD)/router_double
 help:
 	@echo 'Continuum: a Meta-directed network controller. Goose primary, C++ native boundaries.'
 	@echo 'make check         Typecheck the Goose sources'
+	@echo 'make sign          Sign/verify production binaries on macOS (MACOS_SIGN_IDENTITY); no router operations'
+	@echo 'make signing-check Check stable signing/build policy without credentials or Apple tools'
+	@echo 'make tui           Interactive key/models setup, host discovery and bounded Meta investigation'
+	@echo 'make setup-check   Real PTY setup/discovery/service-start acceptance; no provider calls or Keychain writes'
+	@echo 'make service-check Live host waits/resources, shutdown and authored incident/budget acceptance'
+	@echo 'make device-check  Meta-directed setup/dialogue, selected service changes, reboot consent and resident identity acceptance (authored OS/Meta boundaries)'
+	@echo 'make continuity-check Cross-process commit/resume and stale-output rejection; authored model only'
 	@echo 'make status        Build and print implementation status'
 	@echo 'make sim           Deterministic sim transcript (no network)'
 	@echo 'make daemon        Deterministic daemon transcript (no network, no model calls)'
-	@echo 'make loop          Six-tool sim loop, labelled simulated (live leg needs MODEL_API_KEY; fails closed without)'
-	@echo 'make loop-router   Same entry pointed at the C++ double (self-contained)'
+	@echo 'make loop          Supervised Meta controller + validated Meta task (needs MODEL_API_KEY; synthetic observations)'
+	@echo 'make loop-router   Same live entry against the C++ double (needs MODEL_API_KEY; bounded paid calls)'
 	@echo 'make router-cli    Tuner commands against the C++ double (status, apply, restore)'
 	@echo 'make test          Goose contract suites (sim-only, no network)'
 	@echo 'make web-e2e       Build the Goose->C++->router loop binary'

@@ -6,7 +6,7 @@
 // cannot express (the Makefile's manual leap recipe passes them).
 c_sources = ["../native/goose_bridge.c", "../native/leap_bridge.c",
              "../native/router_web.cpp", "../native/meta_web.cpp",
-             "../native/asus_web.cpp", "../native/vault.cpp",
+             "../native/asus_web.cpp", "../native/commission_ssh.cpp", "../native/vault.cpp",
              "host_fake.cpp"];
 c_libs_macos = ["c++"];
 c_libs_linux = ["stdc++"];

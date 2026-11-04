@@ -156,6 +156,20 @@ fn web_restore(scope_id: const u8[:], lease_id: const u8[:], revision: i64,
     return web_call(1, req_text, lease_id);
 }
 
+fn web_restore_state(scope_id: const u8[:], lease_id: const u8[:], revision: i64,
+        qos_on: bool, rate_mbit: i64, host: const u8[:], port: i64) -> WebResult {
+    var req: u8[>..] = [];
+    if !web_request_json("baseline-fifo", rate_mbit, scope_id, lease_id, revision, host, port, req) {
+        return bad_web("restore snapshot invalid");
+    }
+    var body: u8[>..] = [];
+    body.append(req[..req.len - 1]);
+    body.append(",\"restore_on\":");
+    body.append(if qos_on { "true" } else { "false" });
+    body.append("}");
+    return web_call(1, body, lease_id);
+}
+
 fn parse_reconcile_receipt(text: u8[:], revision: i64) -> WebResult {
     if text.len <= 0 || text.len > 2048 {
         return bad_web("receipt size outside 1..2048");

@@ -30,8 +30,20 @@
 // proves the staged credential by login before CT_OK -- a 200 from that
 // firmware family is not evidence the credential stored.
 #include "continuum_native.h"
+#include "commission_ssh.h"
 
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <cctype>
+#include <map>
+#include <chrono>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -255,6 +267,39 @@ struct AsusRef {
     std::string bind_addr;
 };
 
+// A source bind alone still permits gateway routing. Onboarding requires a
+// literal target on the selected up interface's subnet; only loopback may
+// omit the bind. Path admission is not authenticated device identification.
+bool direct_management_path(const AsusRef &r) {
+    in_addr target{}, source{};
+    if (inet_pton(AF_INET, r.host.c_str(), &target) != 1 ||
+        target.s_addr == INADDR_ANY || target.s_addr == INADDR_BROADCAST ||
+        (ntohl(target.s_addr) >> 28) >= 14)
+        return false;
+    if ((ntohl(target.s_addr) >> 24) == 127 && r.bind_addr.empty())
+        return true;
+    if (inet_pton(AF_INET, r.bind_addr.c_str(), &source) != 1 ||
+        source.s_addr == INADDR_ANY)
+        return false;
+    ifaddrs *all = nullptr;
+    if (getifaddrs(&all) != 0) return false;
+    bool found = false;
+    for (const auto *a = all; a; a = a->ifa_next) {
+        if (!(a->ifa_flags & IFF_UP) || !a->ifa_addr || !a->ifa_netmask ||
+            a->ifa_addr->sa_family != AF_INET || a->ifa_netmask->sa_family != AF_INET)
+            continue;
+        const auto *local = reinterpret_cast<const sockaddr_in *>(a->ifa_addr);
+        const auto *mask = reinterpret_cast<const sockaddr_in *>(a->ifa_netmask);
+        if (local->sin_addr.s_addr == source.s_addr && mask->sin_addr.s_addr != 0 &&
+            ((local->sin_addr.s_addr ^ target.s_addr) & mask->sin_addr.s_addr) == 0) {
+            found = true;
+            break;
+        }
+    }
+    freeifaddrs(all);
+    return found;
+}
+
 bool parse_common(const char *data, int64_t len, AsusRef &r,
                   std::string &body) {
     if (len <= 0 || len > 8192) return false;
@@ -268,7 +313,7 @@ bool parse_common(const char *data, int64_t len, AsusRef &r,
     r.port = (int)port;
     if (!json_str(body, "bind_addr", r.bind_addr) || r.bind_addr.size() > 64)
         return false;
-    return true;
+    return direct_management_path(r);
 }
 
 // --- bound HTTP/1.0 round trip with cookie capture and cut detection ---
@@ -280,10 +325,11 @@ struct Session {
 };
 
 RoundRc http_round(Session &s, const std::string &req, int &status,
-                   std::string &body) {
+                   std::string &body, bool unwrap = true) {
     addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
     char port_s[16];
     std::snprintf(port_s, sizeof port_s, "%d", s.ref.port);
     addrinfo *ai = nullptr;
@@ -297,8 +343,14 @@ RoundRc http_round(Session &s, const std::string &req, int &status,
         tv.tv_sec = kTimeoutSec;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-        // Bind to the router-facing address so control traffic never
-        // leaves via another interface's default route (multihomed host).
+        // Refuse gateway routing even if routes change after admission;
+        // binding a source address by itself does not establish that.
+        int direct = 1;
+        if (setsockopt(fd, SOL_SOCKET, SO_DONTROUTE, &direct, sizeof direct) != 0) {
+            close(fd);
+            fd = -1;
+            continue;
+        }
         if (!s.ref.bind_addr.empty()) {
             sockaddr_in la{};
             la.sin_family = AF_INET;
@@ -368,8 +420,10 @@ RoundRc http_round(Session &s, const std::string &req, int &status,
     body = raw.substr(hdr_end + 4);
     // This httpd wraps some replies in a shell page repeating the raw
     // response; unwrap to the last header/body split (live-observed).
-    size_t wrap = body.rfind("\r\n\r\n");
-    if (wrap != std::string::npos) body = body.substr(wrap + 4);
+    if (unwrap) {
+        size_t wrap = body.rfind("\r\n\r\n");
+        if (wrap != std::string::npos) body = body.substr(wrap + 4);
+    }
     return RoundRc::Ok;
 }
 
@@ -471,13 +525,14 @@ long max_admin_len(Session &s) {
     return n > 0 && n <= 256 ? n : 0;
 }
 
-bool fetch_secret(const std::string &ref, std::string &out) {
+bool fetch_secret(const std::string &ref, std::string &out, bool quiet = false) {
     char buf[257];
     int64_t len = 0;
     ct_bytes r{reinterpret_cast<const uint8_t *>(ref.data()),
                (int64_t)ref.size()};
     ct_output o{reinterpret_cast<uint8_t *>(buf), 256};
-    if (ct_vault_fetch(r, o, &len) != CT_OK || len <= 0 || len > 256)
+    auto fetch = quiet ? ct_vault_fetch_quiet : ct_vault_fetch;
+    if (fetch(r, o, &len) != CT_OK || len <= 0 || len > 256)
         return false;
     out.assign(buf, (size_t)len);
     return true;
@@ -525,9 +580,15 @@ bool str_field(const std::string &body, const char *key, size_t max,
     return true;
 }
 
+#include "asus_commission.h"
+
 }  // namespace
 
 extern "C" {
+
+int32_t ct_asus_commission(ct_bytes req, ct_output out, int64_t *out_len) {
+    return commission_dispatch(req, out, out_len);
+}
 
 int32_t ct_asus_discover(ct_bytes req, ct_output out, int64_t *out_len) {
     if (!out_len || !req.data) return CT_INVALID_ARGUMENT;

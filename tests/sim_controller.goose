@@ -170,6 +170,10 @@ fn main() {
     check(applied_case.receipt_replayed, "apply receipt is replayable");
     check(!applied_case.abstained, "recorded apply is not an abstain");
     check(applied_case.model_calls == 1, "recorded apply spent one reply");
+    let released_case = continuum::dispatch_sim_tool(
+        "{\"tool\":\"restore_profile\",\"arguments\":{\"request_id\":\"case-release\",\"scope_id\":\"lab-sim\",\"lease_id\":\"case-apply\",\"expected_revision\":7,\"observation_id\":\"sim-obs\",\"rationale\":\"release controller-only test lease\"}}",
+        "case-apply");
+    check(released_case.verified, "controller-only case releases its lease before another case");
 
     continuum::participant_clear();
     check(continuum::participant_push(apply_reply("not-a-profile", "case-bad")), "bad profile recorded");
@@ -205,6 +209,21 @@ fn main() {
             "You are the controller.", replayed, prior_out,
             "call-9", receipt, "[]", cbody),
         "replay is a continuation input");
+
+    // Starting a protected task must not reset or restore an older lease.
+    continuum::actuator_forget_state();
+    continuum::sim_reset(11);
+    check(continuum::dispatch_sim_tool(apply_env("existing-lease", 7), "existing-run").verified,
+        "existing session has an admitted intervention");
+    continuum::participant_clear();
+    check(continuum::participant_push(abstain_reply()), "competing session reply queued");
+    let competing = continuum::run_protected_task("other-run", "queue", cfg, true);
+    check(competing.outcome.status == continuum::Status.Failed
+        && continuum::active_lease.active && continuum::sim_current_profile_id() == "sqm-fair",
+        "competing task cannot reset or restore an existing session lease");
+    check(!continuum::controller_select_router("127.0.0.1", 1)
+        && !continuum::controller_select_sim(), "backend selection cannot discard an existing lease");
+    continuum::reconcile_expired_lease("existing-lease", 60000);
 
     print("SIM_CONTROLLER_ALL_GREEN");
 }

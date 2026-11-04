@@ -248,5 +248,9 @@ fn main() {
     check(result.escalations == 0, "daemon needed no escalation on the known path");
     check(continuum::sim_current_profile_id() == "baseline-fifo", "daemon leaves baseline active");
 
+    let absent_eval = continuum::eval_arm(continuum::AblationArm.MetaPlusTask);
+    check(absent_eval.outcome.status == continuum::Status.NotImplemented && !absent_eval.task_ok
+            && absent_eval.latency_ms == 0 && continuum::eval_all() == 0,
+        "unexecuted evaluations never claim measurements or successful tasks");
     print("FOUNDATION_ALL_GREEN");
 }

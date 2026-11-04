@@ -27,8 +27,10 @@ fn main() {
     let req_r = continuum::propose_restore(ap.lease_id, fair.scope_id, fair.path_id,
         fair.revision, 1000);
     let obs_r = continuum::sim_observe("sim0", 1).observation;
-    let adm_r = continuum::admit_action(req_r, obs_r, fair, 1000);
-    check(adm_r.admitted, "metamorphic restore admitted");
+    // Lost telemetry cannot trap an owned lease. Scope/revision/identity
+    // still pass through admission and the actuator's real lease match.
+    let adm_r = continuum::admit_action(req_r, continuum::Observation {}, fair, 1000);
+    check(adm_r.admitted, "owned restoration remains available without telemetry");
     let rs = continuum::restore_profile(req_r, adm_r);
     check(rs.restored, "metamorphic restore restored");
     check(continuum::sim_current_profile_id() == "baseline-fifo", "state identical after restore");

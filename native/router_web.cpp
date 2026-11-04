@@ -46,6 +46,7 @@ struct RouterRef {
     std::string lease;
     long revision = 0;
     bool ok = false;
+    bool restore_on = false;
 };
 
 // --- minimal strict JSON subset: flat object, string/int/bool values ---
@@ -126,6 +127,9 @@ bool parse_request(const char *data, int64_t len, RouterRef &r) {
     long rev = 0;
     if (!json_int(body, "revision", rev) || rev < 0) return false;
     r.revision = rev;
+    if (body.find("\"restore_on\"") != std::string::npos &&
+        !json_bool(body, "restore_on", r.restore_on))
+        return false;
     r.ok = true;
     return true;
 }
@@ -371,9 +375,10 @@ int32_t ct_profile_restore(ct_bytes req, ct_output out, int64_t *out_len) {
     RouterRef r;
     if (!parse_request((const char *)req.data, req.len, r))
         return CT_INVALID_ARGUMENT;
-    // Baseline for the lab double: QoS off, full rate.
+    // Restore the captured baseline. Legacy callers explicitly request
+    // QoS off at 100 mbit in their envelope.
     long rev = 0;
-    int32_t rc = qos_set(r, false, 100, rev);
+    int32_t rc = qos_set(r, r.restore_on, r.rate_mbit, rev);
     if (rc != CT_OK) return rc;
     char receipt[512];
     int n = std::snprintf(

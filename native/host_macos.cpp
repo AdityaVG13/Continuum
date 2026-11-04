@@ -9,15 +9,10 @@
 //           the leap. reuse:true returns the existing pair untouched
 //           (lengths only), which is what makes a rerun resume instead
 //           of re-leaping with fresh credentials the router never saw.
-//   rejoin  forget any stale preferred-network entry for the SSID
-//           first (a pre-reset entry makes macOS retry the old PSK
-//           forever while networksetup still exits 0), then join and
-//           wait for a lease in the router prefix. Already holding an
-//           in-prefix address returns before touching the association:
-//           current-SSID readout is TCC-redacted in this context, so
-//           the prefix is the honest proxy. The PSK transits the
-//           networksetup child's argv (no stdin mode exists on macOS);
-//           spawned without a shell, so nothing is interpreted.
+//   rejoin  join the requested SSID, then require a DHCP lease whose
+//           address is currently assigned on that interface. Old aliases
+//           are not join evidence. The PSK goes to networksetup over a
+//           private stdin pipe, never argv, the environment or a shell.
 //   vault   refs are keychain service names verbatim (account
 //           "continuum"), matching `security find-generic-password
 //           -s <ref> -a continuum -w` for operator recovery. Items are
@@ -44,6 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -127,6 +123,34 @@ bool ref_ok(ct_bytes ref, std::string &out) {
 }
 
 // --- keychain (login keychain, generic passwords) ---
+// Legacy ACL interaction is process-wide: serialize every Keychain operation
+// while a quiet read temporarily suppresses it. The SecItem query flag alone
+// does not prevent legacy authorization dialogs.
+std::mutex keychain_mutex;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+class KeychainReadPolicy {
+    std::unique_lock<std::mutex> lock_{keychain_mutex};
+    Boolean previous_ = false;
+    bool restore_ = false;
+    bool ready_ = false;
+public:
+    explicit KeychainReadPolicy(bool allow_ui) {
+        if (allow_ui) {
+            ready_ = true;
+        } else if (SecKeychainGetUserInteractionAllowed(&previous_) == errSecSuccess &&
+                   SecKeychainSetUserInteractionAllowed(false) == errSecSuccess) {
+            restore_ = true;
+            ready_ = true;
+        }
+    }
+    ~KeychainReadPolicy() {
+        if (restore_) SecKeychainSetUserInteractionAllowed(previous_);
+    }
+    bool ready() const { return ready_; }
+};
+#pragma clang diagnostic pop
+
 struct CFStr {
     CFStringRef ref = nullptr;
     explicit CFStr(const std::string &s)
@@ -148,16 +172,23 @@ CFDictionaryRef kc_query(CFStringRef svc) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
-bool kc_fetch(const std::string &service, std::string &out) {
+bool kc_fetch(const std::string &service, std::string &out, bool allow_ui = true) {
+    KeychainReadPolicy policy(allow_ui);
+    if (!policy.ready()) return false;
     CFStr svc(service);
     if (!svc.ref) return false;
     const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount,
-                          kSecReturnData, kSecMatchLimit};
+                          kSecReturnData, kSecMatchLimit, kSecUseAuthenticationUI};
+    // These are legacy login-Keychain items. Keep the C++ API's explicit
+    // noninteractive policy instead of allowing a headless worker to wait on UI.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     const void *vals[] = {kSecClassGenericPassword, svc.ref,
                           CFSTR("continuum"), kCFBooleanTrue,
-                          kSecMatchLimitOne};
+                          kSecMatchLimitOne, kSecUseAuthenticationUIFail};
+#pragma clang diagnostic pop
     CFDictionaryRef q = CFDictionaryCreate(
-        nullptr, keys, vals, 5, &kCFTypeDictionaryKeyCallBacks,
+        nullptr, keys, vals, allow_ui ? 5 : 6, &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
     if (!q) return false;
     CFTypeRef res = nullptr;
@@ -176,6 +207,7 @@ bool kc_fetch(const std::string &service, std::string &out) {
 }
 
 bool kc_store(const std::string &service, const std::string &value) {
+    std::lock_guard<std::mutex> lock(keychain_mutex);
     CFStr svc(service);
     if (!svc.ref) return false;
     CFDataRef data =
@@ -212,6 +244,7 @@ bool kc_store(const std::string &service, const std::string &value) {
 }
 
 bool kc_delete(const std::string &service) {
+    std::lock_guard<std::mutex> lock(keychain_mutex);
     CFStr svc(service);
     if (!svc.ref) return false;
     CFDictionaryRef q = kc_query(svc.ref);
@@ -232,7 +265,7 @@ std::string gen_secret(long n) {
 }
 
 // --- interface IPv4 via getifaddrs (no spawn for the poll path) ---
-std::string iface_ipv4(const std::string &name) {
+std::string iface_ipv4(const std::string &name, const std::string &expected = {}) {
     ifaddrs *all = nullptr;
     if (getifaddrs(&all) != 0 || !all) return "";
     std::string found;
@@ -243,6 +276,7 @@ std::string iface_ipv4(const std::string &name) {
         auto *sin = (sockaddr_in *)a->ifa_addr;
         if (sin->sin_addr.s_addr == 0) continue;
         if (!inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof buf)) continue;
+        if (!expected.empty() && expected != buf) continue;
         found = buf;
         if (!(a->ifa_flags & IFF_LOOPBACK)) break;
     }
@@ -261,15 +295,33 @@ bool iface_name_ok(const std::string &s) {
 }
 
 // Run a fixed argv (no shell) capturing merged stdout+stderr, bounded
-// in time and output. Returns spawn success; exit code via `code`.
+// in time and output. Small private input is preloaded before spawning, so
+// neither a full input pipe nor an early child exit can block the parent.
 bool run_capture(const std::vector<std::string> &args, int timeout_sec,
-                 std::string &out, int &code) {
+                 std::string &out, int &code, const std::string &input = {}) {
     code = -1;
-    if (args.empty()) return false;
+    if (args.empty() || input.size() > 4096) return false;
     int pfds[2];
     if (pipe(pfds) != 0) return false;
+    int in[2] = {-1, -1};
+    if (!input.empty()) {
+        if (pipe(in) != 0) {
+            close(pfds[0]); close(pfds[1]);
+            return false;
+        }
+        ssize_t n = write(in[1], input.data(), input.size());
+        close(in[1]);
+        if (n != (ssize_t)input.size()) {
+            close(in[0]); close(pfds[0]); close(pfds[1]);
+            return false;
+        }
+    }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    if (in[0] >= 0) {
+        posix_spawn_file_actions_adddup2(&fa, in[0], STDIN_FILENO);
+        posix_spawn_file_actions_addclose(&fa, in[0]);
+    }
     posix_spawn_file_actions_adddup2(&fa, pfds[1], STDOUT_FILENO);
     posix_spawn_file_actions_adddup2(&fa, pfds[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&fa, pfds[0]);
@@ -281,6 +333,7 @@ bool run_capture(const std::vector<std::string> &args, int timeout_sec,
     int rc = posix_spawn(&pid, args[0].c_str(), &fa, nullptr, argv.data(),
                          environ);
     posix_spawn_file_actions_destroy(&fa);
+    if (in[0] >= 0) close(in[0]);
     close(pfds[1]);
     if (rc != 0 || pid <= 0) {
         close(pfds[0]);
@@ -319,6 +372,24 @@ bool run_capture(const std::vector<std::string> &args, int timeout_sec,
     return eof;
 }
 
+// A manually retained address or stale lease alone cannot prove reconnection.
+std::string dhcp_ipv4(const std::string &iface) {
+    std::string packet;
+    int code = -1;
+    if (!run_capture({"/usr/sbin/ipconfig", "getpacket", iface}, 2, packet, code) ||
+        code != 0) return "";
+    const std::string marker = "yiaddr = ";
+    size_t begin = packet.find(marker);
+    if (begin == std::string::npos) return "";
+    begin += marker.size();
+    size_t end = packet.find_first_of(" \r\n\t", begin);
+    std::string ip = packet.substr(begin, end - begin);
+    in_addr parsed{};
+    if (inet_pton(AF_INET, ip.c_str(), &parsed) != 1 || parsed.s_addr == 0)
+        return "";
+    return iface_ipv4(iface, ip);
+}
+
 bool parse_body(ct_bytes req, std::string &body) {
     if (!req.data || req.len <= 0 || req.len > 8192) return false;
     body.assign((const char *)req.data, (size_t)req.len);
@@ -329,23 +400,31 @@ bool parse_body(ct_bytes req, std::string &body) {
 
 extern "C" {
 
-int32_t ct_vault_fetch(ct_bytes ref, ct_output out, int64_t *out_len) {
+static int32_t vault_fetch(ct_bytes ref, ct_output out, int64_t *out_len, bool allow_ui) {
     if (!out_len || !out.data || out.capacity <= 0)
         return CT_INVALID_ARGUMENT;
     std::string service;
     if (!ref_ok(ref, service)) return CT_INVALID_ARGUMENT;
     std::string v;
-    if (!kc_fetch(service, v)) return CT_FAILED;
+    if (!kc_fetch(service, v, allow_ui)) return CT_FAILED;
     if ((int64_t)v.size() > out.capacity) return CT_BUFFER_TOO_SMALL;
     std::memcpy(out.data, v.data(), v.size());
     *out_len = (int64_t)v.size();
     return CT_OK;
 }
 
+int32_t ct_vault_fetch(ct_bytes ref, ct_output out, int64_t *out_len) {
+    return vault_fetch(ref, out, out_len, true);
+}
+
+int32_t ct_vault_fetch_quiet(ct_bytes ref, ct_output out, int64_t *out_len) {
+    return vault_fetch(ref, out, out_len, false);
+}
+
 int32_t ct_vault_store(ct_bytes ref, ct_bytes value) {
     std::string service;
     if (!ref_ok(ref, service)) return CT_INVALID_ARGUMENT;
-    if (!value.data || value.len <= 0 || value.len > 256)
+    if (!value.data || value.len <= 0 || value.len > 4096)
         return CT_INVALID_ARGUMENT;
     std::string v((const char *)value.data, (size_t)value.len);
     return kc_store(service, v) ? CT_OK : CT_FAILED;
@@ -439,31 +518,29 @@ int32_t ct_host_rejoin(ct_bytes req, ct_output out, int64_t *out_len) {
                (joined ? "true" : "false") + ",\"already\":" +
                (already ? "true" : "false") + ",\"ip\":\"" + ip + "\"}";
     };
-    // Already holding an in-prefix lease: the current association is
-    // doing the job; networksetup churn could knock it loose.
-    std::string cur = iface_ipv4(iface);
-    if (!prefix.empty() && !cur.empty() &&
-        cur.compare(0, prefix.size(), prefix) == 0) {
-        return put_receipt(out, out_len, receipt(true, true, cur))
-                   ? CT_OK
-                   : CT_BUFFER_TOO_SMALL;
-    }
+    // A retained alias is not association evidence. Always request the target
+    // SSID; the caller must additionally prove protected access to the router.
     const char *kNetworksetup = "/usr/sbin/networksetup";
-    std::string sink;
-    int code = -1;
-    run_capture({kNetworksetup, "-removepreferredwirelessnetwork", iface,
-                 ssid},
-                15, sink, code);
     std::vector<std::string> join = {kNetworksetup, "-setairportnetwork",
                                      iface, ssid};
-    std::string psk;
+    std::string input;
     if (!psk_ref.empty()) {
-        if (!kc_fetch(psk_ref, psk)) return CT_FAILED;
-        join.push_back(psk);
+        std::string psk;
+        if (!kc_fetch(psk_ref, psk, false)) return CT_FAILED;
+        if (psk.size() < 8 || psk.size() > 63 ||
+            psk.find_first_of("\r\n\0", 0, 3) != std::string::npos)
+            return CT_INVALID_ARGUMENT;
+        join.push_back("-");
+        input = psk + "\n";
     }
+    // Resolve authorization before changing remembered networks or association.
+    std::string sink;
+    int code = -1;
+    run_capture({kNetworksetup, "-removepreferredwirelessnetwork", iface, ssid},
+                15, sink, code);
     std::string blob;
     code = -1;
-    if (!run_capture(join, 30, blob, code) ||
+    if (!run_capture(join, 30, blob, code, input) || code != 0 ||
         blob.find("Failed") != std::string::npos ||
         blob.find("Could not find") != std::string::npos) {
         if (!put_receipt(out, out_len, receipt(false, false, "")))
@@ -471,7 +548,7 @@ int32_t ct_host_rejoin(ct_bytes req, ct_output out, int64_t *out_len) {
         return CT_REJECTED;
     }
     for (long waited = 0; waited <= wait_sec; waited++) {
-        std::string ip = iface_ipv4(iface);
+        std::string ip = dhcp_ipv4(iface);
         bool match = !ip.empty() &&
                      (prefix.empty() ||
                       ip.compare(0, prefix.size(), prefix) == 0);
@@ -492,6 +569,12 @@ int32_t ct_host_rejoin(ct_bytes req, ct_output out, int64_t *out_len) {
 #else  // !__APPLE__
 
 extern "C" {
+// A non-macOS session may use a process-local key, but must never silently
+// substitute the non-durable test vault for secure persistent storage.
+int32_t ct_vault_fetch(ct_bytes, ct_output, int64_t *) { return CT_NOT_IMPLEMENTED; }
+int32_t ct_vault_fetch_quiet(ct_bytes, ct_output, int64_t *) { return CT_NOT_IMPLEMENTED; }
+int32_t ct_vault_store(ct_bytes, ct_bytes) { return CT_NOT_IMPLEMENTED; }
+int32_t ct_vault_delete(ct_bytes) { return CT_NOT_IMPLEMENTED; }
 int32_t ct_host_stage(ct_bytes, ct_output, int64_t *) {
     return CT_NOT_IMPLEMENTED;
 }

@@ -1,7 +1,7 @@
 # Continuum Architecture & Topology Map
 
 ## Overview
-Continuum is a Meta-directed network controller built in Goose (primary) with C++ native boundaries. It observes agent workload/network conditions, lets a Meta model choose bounded interventions via tool calls, enforces admission through a deterministic guardian, applies actions through an owned actuator, verifies outcomes, and restores state. Safety paths (watchdog/lease expiry) operate independently of the model.
+Continuum is a Meta-directed network controller built in Goose (primary) with C++ native boundaries. It lets a Meta model choose bounded interventions through a deterministic guardian, executes a separately scoped Meta workload, validates its result, and restores state. Current observations are synthetic; supervised HTTP actuation is loopback-lab only. Model-independent expiry/recovery exists for the simulator; HTTP exit restoration is implemented, but an independent physical-router watchdog is not.
 
 ## Directory Structure
 ```
@@ -18,9 +18,11 @@ Continuum/
 ```
 
 ## Entry Points
-- **`src/main.goose`**: CLI entrypoint. Modes: `--status` (shows implementation ledger), `--sim` (runs `run_sim_loop()`), `--daemon` (runs deterministic policy daemon). Imports via modules.
+- **`src/main.goose`**: CLI entrypoint. Modes: default/`--tui` setup, `--discover`, `--discover-model`, `--test-meta`, `--status`, `--sim`, `--daemon`, `--loop [run-id]` (supervised Meta controller + committed validated workload), `--resume <run-id>` (completed-output revalidation), and `router` (operator tuner).
 - **`src/lib.goose`**: Library entry for tests - imports all modules in one place.
-- **`src/leap_main.goose`**: Leap ceremony entrypoint (onboarding control-channel).
+- **`src/setup.goose`**: TUI composition — five sections plus help, pinned status strip with observation age, Result screen, and TUI program actions. `setup_resident_status()` is the single parser for resident status.
+- **`src/device_agent.goose`**: Shared Meta setup, owner dialogue and resident device capabilities; bounded knowledge and on-demand workflow skills. Device reboot consent is separate from standing service-control permission.
+- **`src/leap_main.goose`**: Enrollment capability entrypoint; hands commissioning decisions back to Meta rather than running a cleanup strategy.
 - **Native fallbacks**: `native/fallback_main.cpp`, `native/continuum_native_stub.cpp`
 
 ## Goose Module Dependency Graph
@@ -37,9 +39,11 @@ Continuum/
 | `meta_provider.goose` | Meta HTTPS transport integration via native ABI | `request_meta()`, `submit_tool_result()`, `meta_exchange()`, externs to `ct_meta_*` |
 | `guardian.goose` | Admission control (fail-closed) | `admit_action()` - enforces ownership, scope, revision, freshness, lease bounds, rate limits, duplicate detection; restoration exempt from some gates |
 | `actuator.goose` | Apply/restore/readback with watchdog | `apply_profile()`, `restore_profile()`, `read_action_result()`, `reconcile_expired_lease()`, `actuator_recover()`, uses sim/store |
-| `controller.goose` | **Sim loop plus router actuator** | `dispatch_sim_tool()`, `run_simulated_loop()`, `run_router_loop()`; `--loop` uses the router only when `ROUTER_HOST` is set, and verified requires the revision readback |
+| `controller.goose` | Shared controller/workload session | `run_protected_task()`, `dispatch_controller_tool()`, `session_record()`; recorded and live responses share execution/cleanup, with separate model and observation provenance |
+| `control_session.goose` | Selected HTTP actuator and ownership | Loopback target selection, baseline capture, admission, apply/readback, conflict-aware exact-baseline restoration; unresolved leases prevent a new session |
 | `telemetry.goose` | Observation collection | `read_observation()` - wraps sim observations for lab-sim paths |
-| `task_runner.goose` | Workload execution/validation | `read_task_context()`, `run_meta_task()`, `validate_task_result()`, `checkpoint_run()` |
+| `task_runner.goose` | Workload execution/validation | `read_task_context()`, `run_meta_task()`, `validate_task_result()` |
+| `continuity.goose` | Completed-work persistence and revalidation | `task_binding()`, `checkpoint_run()`, `resume_task()`; exact current inputs, independent validation, no replayed intervention |
 | `events.goose` | Ordered journal (memory + file sink) | `append_event()`, `beat()` helper, sequence tracking |
 | `policy.goose` | Deterministic policy brain for sim/daemon | `propose_apply()`, `propose_restore()`, `bloat_detected()`, `run_sim_loop()` |
 | `daemon.goose` | Token-free daemon loop | `run_daemon()`, `daemon_decide()` - escalate on unknown cases |
@@ -77,7 +81,7 @@ Defined in `native/continuum_native.h` (ABI v1). All native functions use C ABI,
 
 The mechanical six-tool walk (`run_simulated_loop`) spends no model call. It is the dispatch proof.
 
-The participant loop is the decision. `arm_case` prepares one labelled world (`queue` or `provider`) and does not choose an action. `participant_context` gives the model the observation, the task and the catalogue. A recorded reply, or a live Meta reply, is dispatched by `dispatch_sim_tool`. The guardian admits or rejects. A receipt is replayed into the next call. The loop stops on abstain, the round cap, or a transport failure. It does not substitute a profile.
+The participant loop is the decision. `arm_case` prepares one synthetic world (`queue` or `provider`) without selecting an action. `participant_context` gives the model the observation, task and selected backend's catalogue. `dispatch_controller_tool` routes the actual request to that backend; the guardian admits or rejects, and the execution receipt is replayed. In `run_protected_task`, a controller intervention remains active through Meta workload execution and independent seeded-evidence validation, then the host verifies restoration on success or failure. Model-requested early restoration is respected. No profile is substituted for an abstention. Task validation is not a durable commit: the CLI subsequently checks that task inputs have not changed, publishes a private immutable artifact through `native/continuity.cpp`, and revalidates its readback before acknowledging commitment. `--resume <run-id>` revalidates an already-completed result without a model call, observation collection or actuation; unfinished work is not resumed.
 
 ### Deterministic Daemon (No Model)
 1. Observe via `sim_observe()`
@@ -102,7 +106,8 @@ Full cycle in `run_sim_loop()`: observe → bloat detect → propose/apply/admit
 - Guardian fail-closed; no silent fallbacks to non-Meta providers
 
 ## Testing
-- `make test`: runs 8 Goose suites (sim_loop, foundation, toolbind, metamorphic, golden, conformance_matrix, fuzz_tooljson, leap_logic) - all green
+- `make test`: runs nine Goose suites including `sim_controller`; the request golden now matches the actual six-tool allowlist
+- `make continuity-check`: cross-process artifact commit/recovery, changed-input and invalid-output refusal; authored Meta transport, no live provider
 - `make web-e2e-run`: Goose → C++ transport → C++ router double (self-contained)
 - `make meta-live`: bounded Meta HTTPS call (needs `MODEL_API_KEY`, fails closed without)
 - `make leap-e2e`: headless leap ceremony vs double
@@ -111,9 +116,9 @@ Full cycle in `run_sim_loop()`: observe → bloat detect → propose/apply/admit
 ## Current State
 - Core primitives (contracts, tooljson, guardian, actuator, sim, daemon, store, events) implemented and tested
 - Meta transport (provider + native adapter) implemented
-- Controller sim dispatch and the router apply/restore path are connected at `--loop`. The model does not yet choose the action, and the daemon does not call this path
-- **Telemetry and task runner wired** to use sim paths
+- `--loop` shares model-selected dispatch, Meta workload execution, validation and restoration across the selected backend; keyed execution still needs verification
+- Telemetry is synthetic; the task uses the supplied authored audit corpus; the daemon does not yet invoke this model/session path
 - Router WebApi transport implemented with double
 - Onboarding/leap ceremony implemented
-- All Goose tests passing
+- The historical request-golden mismatch is repaired; current verification and remaining boundaries are recorded in `docs/STATUS.md`
 - Live Meta integration requires credentials/account access (gated)
