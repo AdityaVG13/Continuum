@@ -64,7 +64,7 @@ echo
 # install) would shadow this one and run against stale prompts.
 found="$(command -v continuum 2>/dev/null || true)"
 if [ -n "$found" ] && [ "$found" != "$PREFIX/bin/continuum" ]; then
-    echo "Warning: `continuum` currently runs $found ($("$found" --version 2>/dev/null || echo unknown version))."
+    echo "Warning: typing continuum currently runs $found ($("$found" --version </dev/null 2>/dev/null || echo unknown version))."
     echo "That older copy comes first on your PATH. Remove it, or run $PREFIX/bin/continuum."
 fi
 case ":$PATH:" in

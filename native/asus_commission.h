@@ -239,7 +239,8 @@ bool commission_wait_port(const std::string &host, const std::string &source, in
     remote.sin_family = AF_INET;
     remote.sin_port = htons((uint16_t)port);
     if (port < 1 || port > 65535 || inet_pton(AF_INET, host.c_str(), &remote.sin_addr) != 1) return false;
-    for (int i = 0; i < seconds * 2; ++i) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    while (std::chrono::steady_clock::now() < until) {
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) return false;
         bool ok = true;
@@ -775,20 +776,35 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         return commission_fail(out, out_len, reason, true);
     };
     std::string transport_diagnostic;
-    // A failure before the program is sent has no effect on the router, so a
-    // connection-phase failure (daemon still starting) is retried; a refused
-    // password or a changed host key is not, since retrying cannot fix it.
+    // Only a failure before any password reached the router (refused, timed
+    // out, unroutable, closed before the prompt) is retried: it had no effect,
+    // and it is what a still-restarting daemon produces. Anything after the
+    // password is not retried, so a wrong password never becomes repeated
+    // login failures. Retries stop 30 s after the first attempt: the bootstrap
+    // guard above restores SSH on its own 120 s clock, and the apply path
+    // after this inventory still needs its share of that window.
     bool inventoried = false;
+    const auto retry_until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     for (int attempt = 0; attempt < 4 && !inventoried; ++attempt) {
-        // Wait for the daemon only after a connection-phase failure, so a
-        // transport that answers at once never pays for the probe.
-        if (attempt && !commission_wait_port(connection.host, connection.source, connection.port, 30))
-            poll(nullptr, 0, 3000);
+        if (attempt) {
+            auto left = std::chrono::duration_cast<std::chrono::seconds>(
+                retry_until - std::chrono::steady_clock::now()).count();
+            if (left < 1) break;
+            // Wait for the daemon only after a failure, so a transport that
+            // answers at once never pays for the probe.
+            if (!commission_wait_port(connection.host, connection.source, connection.port, left < 10 ? (int)left : 10))
+                poll(nullptr, 0, 1000);
+        }
         transport_diagnostic.clear();
         inventoried = ct_commission_ssh(connection, commission_runtime_program(), runtime_before, 20, &transport_diagnostic);
-        if (inventoried || transport_diagnostic.rfind("ssh_before_program", 0) != 0 ||
-            transport_diagnostic.find("auth_denied") != std::string::npos ||
-            transport_diagnostic.find("host_key_changed") != std::string::npos) break;
+        auto ends = [&](const char *suffix) {
+            size_t n = std::char_traits<char>::length(suffix);
+            return transport_diagnostic.size() >= n &&
+                transport_diagnostic.compare(transport_diagnostic.size() - n, n, suffix) == 0;
+        };
+        if (inventoried || transport_diagnostic.rfind("ssh_before_program_exit_", 0) != 0 ||
+            !(ends("_connection_refused") || ends("_timeout") || ends("_no_route") || ends("_closed_by_router")))
+            break;
     }
     if (!inventoried)
         return fail(transport_diagnostic.empty() ? "privileged_runtime_inventory_unavailable" : transport_diagnostic.c_str());

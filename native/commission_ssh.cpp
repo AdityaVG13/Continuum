@@ -192,7 +192,7 @@ bool ct_commission_ssh(const ct_commission_connection &c,
             : (has("Host key verification failed") || has("IDENTIFICATION HAS CHANGED")) ? "_host_key_changed"
             : has("no matching") ? "_algorithm_mismatch"
             : has("Can't assign requested address") ? "_bind_failed"
-            : (has("Connection closed") || has("Connection reset")) ? "_closed_by_router"
+            : (has("Connection closed") || has("Connection reset")) ? (password_sent ? "_closed_after_password" : "_closed_by_router")
             : password_sent ? "_after_password" : "";
         return reject(WIFEXITED(status) ?
             "ssh_before_program_exit_" + std::to_string(WEXITSTATUS(status)) + cause : "ssh_before_program_interrupted");

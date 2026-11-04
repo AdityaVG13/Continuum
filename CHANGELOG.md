@@ -3,6 +3,15 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.4] - 2026-11-04
+
+- The SSH retry is bounded to 30 s and only covers failures before the
+  password reached the router (refused, timed out, unroutable, closed before
+  the prompt). It can no longer outlast the router-side SSH guard (120 s) or
+  turn a wrong password into repeated login failures.
+- The installer's "older copy on PATH" warning no longer runs `continuum`
+  by accident (an unquoted backtick in 0.2.0-0.2.3).
+
 ## [0.2.3] - 2026-11-04
 
 - **Meta setup no longer fails on the router's SSH restart.** Turning on LAN
