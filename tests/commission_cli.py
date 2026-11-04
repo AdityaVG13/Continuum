@@ -77,6 +77,8 @@ def device_command():
         action, service = args[0].split("_", 1)
         if service == "sshd":
             return
+        if service not in services and os.environ.get("CT_FOREIGN_DEVICE") == "1":
+            return  # a declared device names its own services; nothing to model
         assert service in services and action in ("stop", "restart"), "unknown vendor service"
         key, names = services[service]
         enabled = action == "restart" and nvram(key=key) != "0"
@@ -502,6 +504,51 @@ def main():
         assert read_device() == before
         transcript.append({"action": "qos_apply_restore", "apply": qos_receipt,
                            "restore": restore_receipt, "idle": idle_receipt})
+        # A device that declares a different vocabulary is managed by the same
+        # binary: the manifest replaces the adapter's table, and the whole
+        # reversible transaction runs against that device's own settings.
+        foreign_keys = ["enable_nfs", "plex_enable", "afp_enable"]
+        request("/applyapp.cgi", {"action_mode": "apply", "enable_nfs": "1",
+                                  "plex_enable": "1", "afp_enable": "1"})
+
+        def read_keys(keys):
+            hook = ";".join(f"nvram_get({key})" for key in keys)
+            body, _ = request("/appGet.cgi?" + urllib.parse.urlencode({"hook": hook}))
+            return json.loads(body)
+
+        assert read_keys(foreign_keys) == dict.fromkeys(foreign_keys, "1")
+        foreign_manifest = directory / "declared.manifest"
+        foreign_manifest.write_text(
+            "nfs file_sharing enable_nfs 1 stop_nfs restart_nfs nfsd\n"
+            "plex media_server plex_enable 1 stop_plex restart_plex plexmediaserver\n"
+            "afp file_sharing afp_enable 1 stop_afp restart_afp netatalk\n")
+        foreign_env = dict(env, CONTINUUM_CAPABILITY_MANIFEST=str(foreign_manifest),
+                           CT_FOREIGN_DEVICE="1", COMMISSION_ACTION="capabilities")
+        graph = subprocess.run([binary], env=foreign_env, text=True, capture_output=True, timeout=15)
+        assert graph.returncode == 0 and '"nfs"' in graph.stdout and '"samba"' not in graph.stdout, (
+            "the declared device's graph must replace the built-in vocabulary: " + graph.stdout)
+        foreign_home = directory / "foreign-home"
+        foreign_home.mkdir(mode=0o700)
+        foreign_run = dict(foreign_env, COMMISSION_ACTION="apply", COMMISSION_DISABLE="nfs,plex",
+                           COMMISSION_EXECUTE="1", COMMISSION_DIR="", HOME=str(foreign_home))
+        foreign_apply = subprocess.run([binary], env=foreign_run, text=True, capture_output=True, timeout=90)
+        assert foreign_apply.returncode == 0, foreign_apply.stdout + foreign_apply.stderr
+        foreign_receipt = [json.loads(line) for line in foreign_apply.stdout.splitlines()
+                           if line.startswith("{")][-1]
+        assert foreign_receipt["phase"] == "baseline_applied"
+        foreign_after = read_keys(foreign_keys)
+        assert foreign_after["enable_nfs"] == "0" and foreign_after["plex_enable"] == "0", foreign_after
+        assert foreign_after["afp_enable"] == "1", "only the declared selection may change"
+        foreign_restore = subprocess.run([binary], env=dict(foreign_run, COMMISSION_ACTION="restore",
+                                                            COMMISSION_DIR=foreign_receipt["state_directory"]),
+                                         text=True, capture_output=True, timeout=60)
+        assert foreign_restore.returncode == 0, foreign_restore.stdout + foreign_restore.stderr
+        foreign_restored = read_keys(foreign_keys)
+        assert foreign_restored == dict.fromkeys(foreign_keys, "1"), (
+            "a declared device must restore its own baseline through the same transaction: "
+            + json.dumps(foreign_restored))
+        transcript.append({"action": "declared_device", "graph": graph.stdout,
+                           "apply": foreign_receipt, "restored": foreign_restored})
         print("COMMISSION_QOS_GREEN", directory)
         print("COMMISSION_APPLY_RESTORE_GREEN", directory)
         if unified:

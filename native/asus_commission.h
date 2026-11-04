@@ -110,8 +110,16 @@ std::string commission_object(const CommissionSnapshot &values) {
 }
 
 bool commission_snapshot(Session &s, CommissionSnapshot &values) {
+    // The device's own table decides which settings exist, so a declared
+    // device is observed through the same transaction as a built-in model.
+    std::vector<std::string> keys = kCommissionKeys;
+    for (const auto &feature : commission_features()) {
+        bool known = false;
+        for (const auto &key : keys) if (key == feature.key) known = true;
+        if (!known) keys.push_back(feature.key);
+    }
     std::string path = "/appGet.cgi?hook=";
-    for (const auto &key : kCommissionKeys) {
+    for (const auto &key : keys) {
         if (path.back() != '=') path += "%3B";
         path += "nvram_get(" + key + ")";
     }
@@ -122,7 +130,7 @@ bool commission_snapshot(Session &s, CommissionSnapshot &values) {
         response.find("Main_Login") != std::string::npos ||
         response.find("AUTHFAIL") != std::string::npos) return false;
     values.clear();
-    for (const auto &key : kCommissionKeys) {
+    for (const auto &key : keys) {
         std::string value;
         if (!json_str(response, key.c_str(), value)) return false;
         values[key] = value;
@@ -603,7 +611,13 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             !json_int(saved, "target_port", port) || port != s.ref.port ||
             !json_str(saved, "admin_ref", saved_ref) || saved_ref != ref)
             return commission_fail(out, out_len, "baseline_target_binding_mismatch");
-        for (const auto &key : kCommissionKeys)
+        std::vector<std::string> baseline_keys = kCommissionKeys;
+        for (const auto &feature : commission_features()) {
+            bool known = false;
+            for (const auto &key : baseline_keys) if (key == feature.key) known = true;
+            if (!known) baseline_keys.push_back(feature.key);
+        }
+        for (const auto &key : baseline_keys)
             if (!json_str(saved, key.c_str(), before[key]))
                 return commission_fail(out, out_len, "baseline_schema_invalid");
         if (!commission_same_core(current, before))
