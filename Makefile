@@ -13,7 +13,13 @@ PREFIX ?= $(HOME)/.local
 install: $(BUILD)/continuum
 	install -d $(PREFIX)/bin
 	install -m 0755 $(BUILD)/continuum $(PREFIX)/bin/continuum
-	@printf '%s\n' "installed $(PREFIX)/bin/continuum"
+	# Prompts and tool schemas are read at runtime; bin/continuum finds them in
+	# ../share/continuum when started outside the checkout.
+	install -d $(PREFIX)/share/continuum/docs $(PREFIX)/share/continuum/fixtures
+	cp -R docs/prompts $(PREFIX)/share/continuum/docs/
+	cp -R schemas $(PREFIX)/share/continuum/
+	cp -R fixtures/corpus $(PREFIX)/share/continuum/fixtures/
+	@printf '%s\n' "installed $(PREFIX)/bin/continuum and $(PREFIX)/share/continuum"
 
 all: help
 

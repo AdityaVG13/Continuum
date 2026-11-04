@@ -103,7 +103,8 @@ try:
     settings = Path(ENV["XDG_CONFIG_HOME"]) / "continuum/settings.json"
     saved = json.loads(settings.read_text())
     check(saved == {"controller_model": "fixture-controller", "task_model": "fixture-workload",
-                    "max_output_tokens": 512, "max_tool_rounds": 4, "request_timeout_ms": 3000},
+                    "max_output_tokens": 512, "max_tool_rounds": 4, "request_timeout_ms": 3000,
+                    "reasoning_effort": "xhigh"},
           "the interactive form persists model/budget settings without storing the API key")
     os.write(master, b"f")
     for label, value in (("Execution host", "local"),

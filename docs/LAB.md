@@ -46,62 +46,79 @@ was proven vs. controlled.
 
 ## Physical lab run (owner-gated, not yet executed)
 
-Everything below happens inside `continuum` (the setup wizard). Each step is
-one screen; `[Enter]` opens that step's confirm frame, which states exactly what
-will be written, and a second `[Enter]` dispatches it. `[Esc]` on a confirm
-frame cancels without dispatch; `[Esc]` on the wizard quits; `[a]` opens the
-panels and `[Esc]` there returns. The whole sequence is driven keystroke by
-keystroke against the double in `make device-check` (`tests/commission_cli.py`,
-`WIZARD_LIFECYCLE_GREEN`); it has not yet run on the physical unit.
+Everything happens inside `continuum` -- no flags, any directory, any link.
+Each step is one screen; `[Enter]` opens that step's confirm frame, which
+states exactly what will be written, and a second `[Enter]` dispatches it.
+`[Esc]` on a confirm frame cancels without dispatch; `[Esc]` on the wizard
+quits; `[a]` opens the panels and `[Esc]` there returns. The flow from "no
+router in reach" through a Wi-Fi bind, and from enrollment to READY, is driven
+keystroke by keystroke against the double in `make device-check`
+(`tests/commission_cli.py`, `WIZARD_REACH_GREEN`, `WIZARD_LIFECYCLE_GREEN`);
+none of it has run on the physical unit yet.
 
-Before you start:
+Install once from the checkout: `make install` (binary in `~/.local/bin`,
+prompts/schemas in `~/.local/share/continuum`). Have ready: the Meta key, your
+line's upload bandwidth in kbit/s, and -- for step 8 only -- a far-end HTTP
+server reached through the WAN that answers `GET` on a probe path and accepts
+`POST` uploads (e.g. `/ping`, `/bulk`). A terminal of 100x40 or more keeps
+receipt lines unclipped.
 
-- The Mac is on the GT-AX11000's LAN **by Ethernet**: a factory enrollment
-  renames the Wi-Fi, so a Wi-Fi link drops mid-step.
-- The terminal is at least 100x40 so the receipt lines below are not clipped.
-- You have the Meta key, your line's upload bandwidth in kbit/s, and a far-end
-  HTTP server **reached through the WAN** that answers `GET` on a probe path
-  and accepts `POST` on an upload path (e.g. `/ping` and `/bulk`). A LAN-only
-  target never crosses the qdisc under test, and only an upload load crosses
-  the shaped egress queue.
-- No factory reset is needed: a configured unit is taken over at step 2.
+How the Mac reaches the router does not matter:
+
+| Situation | What step 1 shows | Keys |
+| --- | --- | --- |
+| Cable to a LAN port (any state) | `Routers this Mac can reach`, the router marked `>` | `Enter`, `Enter` |
+| On the router's existing Wi-Fi | same, `(Wi-Fi, default route)` | `Enter`, `Enter` |
+| Factory-reset router, Mac on no network | `No router is in reach` | `w`, setup network name from the label (ASUS: `ASUS_XX`), `Enter`, `o`; then `1`, `Enter` |
+| Mac on another network, router only on its own Wi-Fi | the other router only | `w`, name, `Enter`, `o` (open) or `p` + password; then its number, `Enter` |
+| Several routers (cable + Wi-Fi) | numbered list, each labelled by what answers on it | its number, `Enter` |
+
+macOS hides scanned Wi-Fi names from unsigned tools, so the owner types the
+name; the join itself (and the DHCP lease) is checked by Continuum. Each row is
+labelled `ASUS router -- supported`, `<vendor> router -- no Continuum backend
+yet`, or `no web answer on port 80`; only ASUS has a backend today.
 
 | Step | Keys | You should see | Stop if |
 | --- | --- | --- | --- |
-| start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` and this host's default-route router | the candidate is not the GT-AX: `a`, `p` chooses another |
-| 1 BIND | `Enter`, `Enter` | `STEP 2 OF 8` (nothing written to the router) | |
-| 2 ENROLL, factory unit | `Enter`, `Enter` | about a minute, then `STEP 3 OF 8`; Wi-Fi renamed to the stem | any other `WHY IT STOPPED` |
+| start | `continuum` | `STEP 1 OF 8   BIND THE ROUTER` (table above) | the GT-AX is not listed after `Enter` (look again) |
+| 1 BIND | see table | `STEP 2 OF 8` (nothing written to the router) | |
+| 2 ENROLL, factory unit | `Enter`, `Enter` | about a minute, then `STEP 3 OF 8`; Wi-Fi renamed to the stem, the Mac rejoins it by itself | any other `WHY IT STOPPED` |
 | 2 ENROLL, configured unit | `Enter`, `Enter`, then `p`, admin password, `Enter` | `WHY IT STOPPED ... already set up`, then `Password accepted` and `STEP 3 OF 8`; zero writes | the password is refused twice |
-| 3 KEY | `Enter`, key, `Enter`, `y` or `n` (Keychain), `Enter` | one connection-test call, then `STEP 4 OF 8` and `Key  verified` | refused: `k` enters another key |
+| 3 KEY | `Enter`, key, `Enter`, `y` or `n` (Keychain) | `CHOOSE THE META MODEL`: the models this key can use, with Meta's prices | `refused this key while listing`: `k` enters another |
+| 3 MODEL | `Enter` keeps the marked `muse-spark-1.3` (or a number) | `REASONING EFFORT` with the cap and step bound per level | |
+| 3 EFFORT | a number (`5` = xhigh), `Enter`, `Enter` | one connection-test call, then `STEP 4 OF 8` and `Key  verified` | the test is refused |
 | 4 SETUP | `Enter`, `Enter` | Meta works (bounded calls), then `STEP 5 OF 8` with `RECEIPT    baseline applied; runtime and recovery verified by the router` | `WHY IT STOPPED` (Meta finishing without a verified baseline counts as a failure) |
-| 5 REBOOT | `Enter`, `Enter` | `WAITING FOR THE ROUTER`, `Went down   yes`, then `The router stopped answering and is back` (a few minutes) | `the router has not answered for 10 minutes` |
+| 5 REBOOT | `Enter`, `Enter` | `WAITING FOR THE ROUTER`, `Went down   yes`, then `The router stopped answering and is back` | `the router has not answered for 10 minutes` |
 | 6 VERIFY | `Enter`, `Enter` | `PERSIST    verified by the router` and `STEP 7 OF 8`; no model call | `reboot_not_observed`: power-cycle the unit, then `Enter` |
-| 7 TUNE, preflight | `Enter`, `Enter` | `PREFLIGHT  tc present; eth0 root queue now: ...`; nothing written | `qdisc_tool_unavailable` (no `tc`: the run ends); `already_managed` (turn off Adaptive QoS / bandwidth limiter, then `Enter`) |
-| 7 TUNE, apply | `Enter`, `Ctrl-U` + upload kbit/s, `Enter`, `Ctrl-U` + `eth0` (`ppp0` on PPPoE), `Enter`, `Enter` | `APPLY SHAPING` names `cake bandwidth <N>kbit overhead 0`; then `QDISC      cake <N> kbit/s on eth0` and `READBACK   verified on the router`, `STEP 8 OF 8` | any receipt without `READBACK   verified`; `readback` refusals roll back: `c`, lower rate |
-| 8 MEASURE | `Enter`, `host:port/ping`, `Enter`, `Ctrl-U` + `/bulk`, `Enter`, `Enter` | `MEASURED   claimable: 20 idle and 20 loaded samples, ... bytes uploaded` and the `EVIDENCE` path | an unclaimable verdict: `c` fixes the target, `Enter` re-runs |
-| 8 QUALIFY | `Enter`, `Enter` | `SETUP COMPLETE` | `evidence_predates_baseline` or any refusal |
-| READY | `Enter`, four prompts (`Enter` keeps each default; answer `0` to automatic Meta assessments unless you want them), `Enter` | `Monitor  monitoring, pid <pid>, <n> samples`, refreshing each second | `Monitor not started` |
-| undo (A/B) | `u`, `Enter` | kernel default queue back; TUNE and MEASURE re-open | a restore without the default root read back |
+| 7 TUNE, preflight | `Enter`, `Enter` | `PREFLIGHT  tc present; eth0 root queue now: ...`; nothing written | `qdisc_tool_unavailable`; `already_managed` (turn off Adaptive QoS, then `Enter`) |
+| 7 TUNE, apply | `Enter`, `Ctrl-U` + upload kbit/s, `Enter`, `Ctrl-U` + `eth0` (`ppp0` on PPPoE), `Enter`, `Enter` | `QDISC      cake <N> kbit/s on eth0` and `READBACK   verified on the router`, `STEP 8 OF 8` | no `READBACK   verified`; `readback` refusals roll back: `c`, lower rate |
+| 8 MEASURE | `Enter`, `host:port/ping`, `Enter`, `Ctrl-U` + `/bulk`, `Enter`, `Enter` | `MEASURED   claimable: ...` and the `EVIDENCE` path | unclaimable: `c` fixes the target |
+| 8 QUALIFY | `Enter`, `Enter` | `SETUP COMPLETE` | any refusal |
+| READY | `Enter`, four prompts (`Enter` keeps each default), `Enter` | `Monitor  monitoring, pid <pid>, <n> samples`, refreshing each second | `Monitor not started` |
+| undo (A/B) | `u`, `Enter` | kernel default queue back; TUNE and MEASURE re-open | |
 | leave | `Esc` | the monitor keeps running; stop it with `kill <pid>` | |
+
+Minimum for tonight's go/no-go (factory reset): steps start through 4 --
+reachable over Wi-Fi from nothing, enrolled under a Continuum-minted
+credential, the chosen Meta model accepted, and the baseline applied by Meta
+with the router's receipt.
 
 The target and upload path (and the upload rate and WAN interface) are saved
 once in `~/.config/continuum/network.json`; `c` on steps 7 and 8 changes them.
-A control run without shaping is `continuum --measure <host:port/ping> /bulk --upload`
-after the undo.
+The model and effort live in `~/.config/continuum/settings.json`.
 
 Record every artifact: `~/.config/continuum/device/state.json`, the
 `device/measure-*.json` evidence the wizard named, `device/recovery-*/qos-last.json`
 and `service/status.json`. Abort criteria: any apply receipt without a verified
 readback, any restore that cannot read the kernel-default root, or a measurement
-whose verdict is not `claimable`. A demo without the receipts is a narrative,
-not a result.
+whose verdict is not `claimable`.
 
-Headless equivalents (debugging only): `continuum --device-step inspect`,
-`--device-step verify --execute`, `--device-step qos-status`,
+Headless equivalents (debugging only): `continuum --meta-models`,
+`--test-meta`, `--device-step inspect`, `--device-step verify --execute`,
+`--device-step qos-status`,
 `--device-qos '{"bandwidth_kbps":N,"interface":"eth0","mode":"cake","overhead_bytes":0}' --execute`,
 `--device-qos-restore --execute`, `--measure <target> <load-path> --upload`
-(prints `MEASURE_EVIDENCE <path>` before its receipt) and
-`--device-qualify <path> --execute`.
+and `--device-qualify <path> --execute`.
 
 ## What this does not prove
 
