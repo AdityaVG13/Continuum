@@ -1,6 +1,6 @@
 # Continuum: Meta-centered demo runbook
 
-**Status: proposed live demo, not an executed result.** All timings below are presentation targets. The Meta transport and virtual-router loop exist and are proven against the lab double; no live Meta call, real-router mutation, or hackathon measurement is claimed yet.
+**Status: stage script, not an executed run.** The device lifecycle it depends on is proven against the loopback ASUS double, and its onboarding and commissioning parts have run on a physical GT-AX11000 (both firmware branches, outcome `Verified`; lean settings survived a real reboot). What has not happened is this exact stage script with a live Meta measurement — the timings below are presentation targets, and no latency or goodput number is claimed.
 
 ## 1. Story the audience should understand
 
