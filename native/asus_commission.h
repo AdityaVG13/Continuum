@@ -32,6 +32,61 @@ const std::vector<std::string> kCommissionCore = {
     "qos_type", "wl0_ssid", "wl0_auth_mode_x", "wl1_ssid", "wl1_auth_mode_x",
     "wl2_ssid", "wl2_auth_mode_x"};
 
+std::string commission_identity(const CommissionSnapshot &values) {
+    auto field = [&](const char *key) {
+        auto it = values.find(key);
+        return it == values.end() ? std::string() : it->second;
+    };
+    std::string out = "{\"productid\":\"";
+    json_escape(field("productid"), out);
+    out += "\",\"mac\":\"";
+    json_escape(field("lan_hwaddr"), out);
+    return out + "\"}";
+}
+
+// The device adapter owns the only mapping from its own primitives to the
+// product's capability classes. Core, policy and prompts never see these keys.
+std::string commission_capabilities(const CommissionSnapshot &values) {
+    struct Row {
+        const char *id;
+        const char *cls;
+        const char *key;
+        bool settable;
+        bool boolean;
+    };
+    static const Row rows[] = {
+        {"samba", "file_sharing", "enable_samba", true, true},
+        {"ftp", "file_sharing", "enable_ftp", true, true},
+        {"webdav", "file_sharing", "enable_webdav", true, true},
+        {"dlna", "media_server", "dms_enable", true, true},
+        {"daap", "media_server", "daapd_enable", true, true},
+        {"vendor_qos", "traffic_control", "qos_enable", false, true},
+        {"ssh", "remote_access", "sshd_enable", false, true},
+        {"vendor_firmware", "update_channel", "firmver", false, false},
+    };
+    std::string out = "[";
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        auto it = values.find(rows[i].key);
+        std::string state = "unknown";
+        if (it != values.end() && !it->second.empty()) {
+            if (!rows[i].boolean) state = "present";
+            else if (it->second == "0") state = "disabled";
+            else state = "enabled";
+        }
+        if (i) out += ",";
+        out += "{\"id\":\"";
+        out += rows[i].id;
+        out += "\",\"class\":\"";
+        out += rows[i].cls;
+        out += "\",\"state\":\"";
+        out += state;
+        out += "\",\"settable\":";
+        out += rows[i].settable ? "true" : "false";
+        out += ",\"evidence\":\"device_reported\"}";
+    }
+    return out + "]";
+}
+
 std::string commission_object(const CommissionSnapshot &values) {
     std::string out = "{";
     for (const auto &[key, value] : values) {
@@ -293,6 +348,120 @@ bool commission_process_present(const std::string &data, const char *name) {
     return *name && data.find("," + std::string(name) + ",") != std::string::npos;
 }
 
+// --- qdisc profile boundary -------------------------------------------------
+// Every command below is generated from a validated enum or integer. The model
+// chooses a profile, never a shell string. The same bounds are rechecked in
+// Goose (src/device_agent.goose) because this adapter is not the only caller.
+
+std::string qdisc_root_kind(const std::string &show) {
+    size_t line = 0;
+    while (line < show.size()) {
+        size_t end = show.find('\n', line);
+        if (end == std::string::npos) end = show.size();
+        const std::string text = show.substr(line, end - line);
+        if (text.find(" root") != std::string::npos) {
+            size_t p = text.find("qdisc ");
+            if (p == std::string::npos) return "";
+            p += 6;
+            size_t e = p;
+            while (e < text.size() && text[e] != ' ' && text[e] != '\r') e++;
+            return text.substr(p, e - p);
+        }
+        line = end + 1;
+    }
+    return "";
+}
+
+// Kernel-default roots are the only state Continuum will replace, and they are
+// exactly what `tc qdisc del dev X root` restores. A root managed by the vendor
+// QoS or another agent is refused rather than stomped.
+bool qdisc_default_kind(const std::string &show) {
+    const std::string kind = qdisc_root_kind(show);
+    return kind == "pfifo_fast" || kind == "noqueue" || kind == "mq" || kind == "pfifo";
+}
+
+// `tc` prints rates with %g in the largest unit (90000kbit -> "90Mbit" or
+// "90000Kbit"), so compare normalized kilobits rather than display text.
+bool qdisc_cake_rate_kbit(const std::string &show, double &kbit) {
+    size_t p = show.find("bandwidth ");
+    if (p == std::string::npos) return false;
+    p += 10;
+    size_t e = p;
+    while (e < show.size() && (std::isdigit((unsigned char)show[e]) || show[e] == '.')) e++;
+    if (e == p) return false;
+    double value = std::strtod(show.substr(p, e - p).c_str(), nullptr);
+    std::string unit = show.substr(e, 4);
+    for (auto &c : unit) c = (char)std::tolower((unsigned char)c);
+    if (unit.rfind("gbit", 0) == 0) value *= 1000000.0;
+    else if (unit.rfind("mbit", 0) == 0) value *= 1000.0;
+    else if (unit.rfind("kbit", 0) == 0) { /* already kbit */ }
+    else if (unit.rfind("bit", 0) == 0) value /= 1000.0;
+    else return false;
+    kbit = value;
+    return true;
+}
+
+// Absence is data, not a shell exit code the caller has to decode: the probe
+// prints qdisc_tool=absent so an unsupported unit refuses honestly.
+std::string commission_qdisc_probe(const std::string &iface) {
+    return "set -eu\n"
+        "if ! tc -V >/dev/null 2>&1; then\n"
+        " printf 'CT_DATA_BEGIN\\nqdisc_tool=absent\\nCT_DATA_END\\n'\n"
+        " exit 0\n"
+        "fi\n"
+        "printf 'CT_DATA_BEGIN\\n'\n"
+        "tc qdisc show dev " + iface + "\n"
+        "printf 'CT_DATA_END\\n'\n";
+}
+
+std::string commission_qdisc_apply(const std::string &iface, const std::string &mode,
+                                   long kbps, long overhead) {
+    const std::string shape = mode == "cake"
+        ? "cake bandwidth " + std::to_string(kbps) + "kbit overhead " + std::to_string(overhead)
+        : "fq_codel limit 10240";
+    return "set -eu\n"
+        "tc qdisc replace dev " + iface + " root " + shape + "\n"
+        "printf 'CT_DATA_BEGIN\\n'\n"
+        "tc qdisc show dev " + iface + "\n"
+        "printf 'CT_DATA_END\\n'\n";
+}
+
+std::string commission_qdisc_restore(const std::string &iface) {
+    return "set -eu\n"
+        "tc qdisc del dev " + iface + " root 2>/dev/null || true\n"
+        "printf 'CT_DATA_BEGIN\\n'\n"
+        "tc qdisc show dev " + iface + "\n"
+        "printf 'CT_DATA_END\\n'\n";
+}
+
+std::string qdisc_excerpt(const std::string &text) {
+    std::string out;
+    json_escape(text.size() > 512 ? text.substr(0, 512) : text, out);
+    return out;
+}
+
+// A root qdisc may be replaced only when it is the kernel default or the exact
+// profile Continuum last verified here. Retuning our own qdisc is allowed;
+// stomping a vendor QoS hierarchy is not. The durable marker is a claim this
+// host wrote after a verified readback, never model input.
+bool qdisc_owned(const std::string &directory, const std::string &iface,
+                 const std::string &kind) {
+    std::string saved;
+    if (!commission_load(directory + "/qos-owned.txt", saved)) return false;
+    return saved == iface + "\n" + kind + "\n";
+}
+
+// Restore can name the interface it installed without a model-supplied value:
+// the durable marker records the last interface Continuum verified here.
+std::string qos_owned_interface(const std::string &directory) {
+    std::string saved;
+    if (!commission_load(directory + "/qos-owned.txt", saved)) return "";
+    const size_t nl = saved.find('\n');
+    const std::string iface = nl == std::string::npos ? "" : saved.substr(0, nl);
+    return (iface == "eth0" || iface == "ppp0") ? iface : "";
+}
+
+
 std::string commission_quote(const std::string &text) {
     std::string out = "'";
     for (char c : text) out += c == '\'' ? "'\\''" : std::string(1, c);
@@ -535,6 +704,124 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
     if (!ct_commission_ssh(connection, commission_runtime_program(), runtime_before, 20, &transport_diagnostic))
         return fail(transport_diagnostic.empty() ? "privileged_runtime_inventory_unavailable" : transport_diagnostic.c_str());
     if (!commission_runtime_valid(runtime_before)) return fail("privileged_runtime_inventory_unqualified");
+    if (action == "qos") {
+        // QoS is a distinct effect class from optional-service cleanup: its
+        // baseline is the interface's own qdisc state, and its restore is the
+        // kernel default. It never rewrites nvram or service flags.
+        std::string op, iface, mode;
+        long kbps = 0, overhead = 0;
+        if (!str_field(body, "qos_op", 8, true, op) ||
+            !str_field(body, "qos_interface", 8, false, iface))
+            return fail("qos_profile_invalid");
+        if (op != "apply" && op != "restore") return fail("qos_operation_unsupported");
+        if (op == "restore" && iface.empty()) iface = qos_owned_interface(directory);
+        if (iface != "eth0" && iface != "ppp0") return fail("qos_interface_unsupported");
+        if (op == "apply") {
+            if (!str_field(body, "qos_mode", 16, true, mode) ||
+                !json_int(body, "qos_bandwidth_kbps", kbps) ||
+                !json_int(body, "qos_overhead_bytes", overhead))
+                return fail("qos_profile_invalid");
+            if (mode != "cake" && mode != "fq_codel") return fail("qos_mode_unsupported");
+            if (kbps < 256 || kbps > 100000) return fail("qos_bandwidth_out_of_range");
+            if (overhead < 0 || overhead > 200) return fail("qos_overhead_out_of_range");
+        }
+        std::string probe;
+        if (!ct_commission_ssh(connection, commission_qdisc_probe(iface), probe, 20,
+                               &transport_diagnostic))
+            return fail(transport_diagnostic.empty() ? "qdisc_probe_unavailable"
+                                                     : transport_diagnostic.c_str());
+        if (probe.find("qdisc_tool=absent") != std::string::npos)
+            return fail("qdisc_tool_unavailable");
+        if (qdisc_root_kind(probe).empty()) return fail("qdisc_root_unreadable");
+        // events.jsonl is last-write-wins for the whole directory, so a later
+        // unrelated restore would erase the qdisc record. Keep it in its own
+        // file as well; the before/ownership markers remain the durable state.
+        const auto record = [&](const std::string &receipt) -> bool {
+            return commission_save(directory + "/qos-last.json", receipt, true) &&
+                   commission_save(directory + "/events.jsonl", receipt + "\n", true);
+        };
+        if (op == "restore") {
+            if (qdisc_default_kind(probe)) {
+                if (!commission_save(directory + "/qos-owned.txt", iface + "\nnone\n", true))
+                    return fail("qos_ownership_not_durable");
+                std::string receipt = "{\"phase\":\"qos_restored\",\"authenticated\":true,"
+                    "\"qos_verified\":true,\"changed\":false,\"qos_interface\":\"" + iface +
+                    "\",\"qdisc\":\"" + qdisc_excerpt(probe) + "\",\"settings\":" +
+                    commission_object(current) + "}";
+                if (!record(receipt))
+                    return fail("qos_receipt_not_durable");
+                bootstrap.done(commission_ssh_settings(s, current, user, password));
+                return commission_emit(out, out_len, receipt);
+            }
+            std::string after;
+            if (!ct_commission_ssh(connection, commission_qdisc_restore(iface), after, 20,
+                                   &transport_diagnostic))
+                return fail(transport_diagnostic.empty() ? "qos_restore_failed"
+                                                         : transport_diagnostic.c_str());
+            if (!qdisc_default_kind(after)) return fail("qos_restore_unverified");
+            if (!commission_save(directory + "/qos-owned.txt", iface + "\nnone\n", true))
+                return fail("qos_ownership_not_durable");
+            std::string receipt = "{\"phase\":\"qos_restored\",\"authenticated\":true,"
+                "\"qos_verified\":true,\"changed\":true,\"qos_interface\":\"" + iface +
+                "\",\"qdisc\":\"" + qdisc_excerpt(after) + "\",\"settings\":" +
+                commission_object(current) + "}";
+            if (!record(receipt))
+                return fail("qos_receipt_not_durable");
+            bootstrap.done(commission_ssh_settings(s, current, user, password));
+            return commission_emit(out, out_len, receipt);
+        }
+        // Only an unmanaged, kernel-default root — or the qdisc this host last
+        // verified — is replaced; a vendor QoS hierarchy belongs to its owner.
+        if (!qdisc_default_kind(probe)) {
+            if (!qdisc_owned(directory, iface, qdisc_root_kind(probe)))
+                return fail("qdisc_root_already_managed");
+        } else if (!commission_save(directory + "/qos-before.txt", probe, true)) {
+            return fail("qos_baseline_not_durable");
+        }
+        std::string after;
+        bool ran = ct_commission_ssh(connection,
+            commission_qdisc_apply(iface, mode, kbps, overhead), after, 30,
+            &transport_diagnostic);
+        bool verified = false;
+        std::string rate = mode == "cake" ? "pending" : "not_applicable";
+        if (ran && qdisc_root_kind(after) == mode) {
+            if (mode == "fq_codel") {
+                verified = true;
+            } else {
+                double readback = 0;
+                if (qdisc_cake_rate_kbit(after, readback) &&
+                    std::fabs(readback - (double)kbps) <= 1.0) {
+                    rate = "verified";
+                    verified = true;
+                }
+            }
+        }
+        if (!verified) {
+            // A failed or misread apply may still have reached the device.
+            // Return it to the kernel default rather than leaving an
+            // unverified qdisc in place.
+            std::string ignored_restore;
+            (void)ct_commission_ssh(connection, commission_qdisc_restore(iface),
+                                    ignored_restore, 20);
+            return fail(ran ? (rate == "pending" ? "qos_rate_readback_mismatch"
+                                                 : "qos_readback_mismatch")
+                            : (transport_diagnostic.empty() ? "qos_apply_failed"
+                                                            : transport_diagnostic.c_str()));
+        }
+        if (!commission_save(directory + "/qos-owned.txt", iface + "\n" + mode + "\n", true))
+            return fail("qos_ownership_not_durable");
+        std::string receipt = "{\"phase\":\"qos_applied\",\"authenticated\":true,"
+            "\"qos_verified\":true,\"qos_mode\":\"" + mode + "\",\"qos_interface\":\"" +
+            iface + "\",\"bandwidth_kbps\":" + std::to_string(kbps) +
+            ",\"overhead_bytes\":" + std::to_string(overhead) +
+            ",\"rate_readback\":\"" + rate + "\",\"before_qdisc\":\"" +
+            qdisc_excerpt(probe) + "\",\"after_qdisc\":\"" + qdisc_excerpt(after) +
+            "\",\"settings\":" + commission_object(current) + "}";
+        if (!record(receipt))
+            return fail("qos_receipt_not_durable");
+        bootstrap.done(commission_ssh_settings(s, current, user, password));
+        return commission_emit(out, out_len, receipt);
+    }
     if (action == "reboot") {
         const std::string boot = commission_boot_id(runtime_before);
         if (boot.empty()) return fail("current_boot_unavailable");
@@ -701,7 +988,8 @@ int32_t commission_dispatch(ct_bytes req, ct_output out, int64_t *out_len) {
         !str_field(body, "admin_ref", 128, true, ref) ||
         !str_field(body, "action", 16, true, action)) return CT_INVALID_ARGUMENT;
     if (action != "inspect" && action != "apply" && action != "restore" &&
-        action != "authorize" && action != "runtime" && action != "reboot" && action != "verify")
+        action != "authorize" && action != "runtime" && action != "reboot" &&
+        action != "verify" && action != "qos" && action != "capabilities")
         return commission_fail(out, out_len, "unsupported_action");
     // Standing setup/optimization permission never authorizes a device reboot.
     // This bit is supplied only by a separately confirmed owner operation, not

@@ -91,11 +91,66 @@ fn commission_request(cfg: LeapConfig, action: const u8[:], directory: const u8[
         if !quiet { print("COMMISSION_FAILED status=", rc, " reason=", leap_reason(rc)); }
         return false;
     }
-    var doc: json::Node[>..] = [];
-    var decoded: u8[>..] = [];
-    let root, err = json::parse(receipt[..n], doc, decoded);
-    let authenticated, valid_auth = json::as_bool(json::member(root, "authenticated"));
-    if !root || !valid_auth || !authenticated {
+    if !commission_authenticated(receipt[..n]) {
+        if !quiet { print("COMMISSION_FAILED malformed or unauthenticated receipt"); }
+        return false;
+    }
+    return true;
+}
+
+// QoS uses the same transport, credential reference and authentication proof
+// as the service cleanup path, but keeps its own effect class: the baseline is
+// the interface's qdisc state and restore returns the kernel-default root.
+fn commission_qos(cfg: LeapConfig, directory: const u8[:], execute: bool, op: const u8[:],
+        qos: QosProfile, result: u8[>..]&, quiet: bool = false) -> bool {
+    if op != "apply" && op != "restore" {
+        if !quiet { print("COMMISSION_REFUSED unsupported qos operation"); }
+        return false;
+    }
+    var bind: u8[>..] = [];
+    bind.append(cfg.bind_addr);
+    if bind.len == 0 && cfg.interface_id.len > 0 {
+        var iface_req: u8[>..] = [];
+        var iface_resp: u8[>..] = [];
+        if host_iface_request(cfg, iface_req) && leap_call(6, iface_req, iface_resp) == 0 {
+            let info = parse_iface_receipt(iface_resp);
+            if info.ok { bind.append(info.ip); }
+        }
+    }
+    var req: u8[>..] = [];
+    if !valid_id(cfg.admin_user, 32) || !valid_id(cfg.admin_ref, 128)
+            || !leap_common(cfg, bind, req) {
+        if !quiet { print("COMMISSION_REFUSED invalid target or credential reference"); }
+        return false;
+    }
+    req.append(",\"admin_user\":");
+    json::format_string(req, cfg.admin_user);
+    req.append(",\"admin_ref\":");
+    json::format_string(req, cfg.admin_ref);
+    req.append(",\"action\":\"qos\",\"directory\":");
+    json::format_string(req, directory);
+    req.append(",\"execute\":");
+    json::format_bool(req, execute);
+    req.append(",\"qos_op\":");
+    json::format_string(req, op);
+    req.append(",\"qos_interface\":");
+    json::format_string(req, qos.interface_id);
+    req.append(",\"qos_mode\":");
+    json::format_string(req, qos.mode);
+    req.append(",\"qos_bandwidth_kbps\":");
+    json::format_int(req, qos.bandwidth_kbps);
+    req.append(",\"qos_overhead_bytes\":");
+    json::format_int(req, qos.overhead_bytes);
+    req.append("}");
+    var receipt: u8[..16384] = [0; 16384];
+    var n: i64 = 0;
+    let rc = ct_asus_commission_json(req, receipt, n);
+    if n > 0 && n <= receipt.len { result.append(receipt[..n]); }
+    if rc != 0 || n <= 0 || n > receipt.len {
+        if !quiet { print("COMMISSION_FAILED status=", rc, " reason=", leap_reason(rc)); }
+        return false;
+    }
+    if !commission_authenticated(receipt[..n]) {
         if !quiet { print("COMMISSION_FAILED malformed or unauthenticated receipt"); }
         return false;
     }

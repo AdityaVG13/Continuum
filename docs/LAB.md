@@ -29,11 +29,20 @@ was proven vs. controlled.
   resident incidents share one selected-device capability dispatcher.
 - Owner policy, protected clients/services, lab/load/effects admission,
   restore refusal, secure app-identity enforcement, and resident handoff.
+- The ASUS commission channel applies a bounded CAKE/fq_codel profile with
+  generated `tc` programs, reads the root qdisc and rate back from the device,
+  restores the kernel-default qdisc, and refuses honestly when `tc` is absent,
+  the root is vendor-managed, the profile is out of bounds, or the device does
+  not honor the requested rate. `make device-check` drives these cases through
+  the same SSH/generated-program path the physical adapter uses, against a
+  modeled firmware shell.
 - The TUI renders the real state at 80x24 and wider, restores the terminal on
   exit, and keeps secrets out of model context.
 
 ## What this does not prove
 
 - No live Meta call, no real-router mutation, no Internet performance.
+- No `tc`/CAKE run on the physical GT-AX11000 yet, so no latency, goodput or
+  bufferbloat number is claimed.
 - Controlled doubles are not live Meta or physical-router proof. Session-local
   performance numbers in `benchmarks/` (gitignored) are not a claim.

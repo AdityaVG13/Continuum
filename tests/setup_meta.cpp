@@ -57,6 +57,29 @@ int32_t ct_meta_submit(ct_handle, ct_bytes request, uint64_t *out) {
                     return fail("program tool did not return the expected real receipt");
                 output = "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Program operation acknowledged.\"}]}";
             } else return fail("unexpected program continuation");
+        } else if (std::string(scenario) == "qos") {
+            // The model proposes a profile; the guardian and adapter own the
+            // bounds, the device readback, and the restore.
+            const std::string profile =
+                "{\"bandwidth_kbps\":90000,\"interface\":\"eth0\",\"mode\":\"cake\",\"overhead_bytes\":18}";
+            if (turn == 0) {
+                if (body.find("apply_qos") == std::string::npos)
+                    return fail("qos capability was not advertised to Meta");
+                output = call("manage_device",
+                    ("{\"candidate_id\":\"lo0:127.0.0.1\",\"operation\":\"apply_qos\",\"payload\":" +
+                     quote(profile) + "}").c_str());
+            } else if (turn == 1) {
+                if (body.find("qos_applied") == std::string::npos ||
+                    body.find("qos_verified") == std::string::npos ||
+                    body.find("rate_readback") == std::string::npos)
+                    return fail("model did not receive the actual qdisc readback receipt");
+                output = call("manage_device",
+                    "{\"candidate_id\":\"lo0:127.0.0.1\",\"operation\":\"restore_qos\",\"payload\":\"\"}");
+            } else if (turn == 2) {
+                if (body.find("qos_restored") == std::string::npos)
+                    return fail("model did not receive the actual qos restore receipt");
+                output = "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"CAKE applied and verified; restored to default.\"}]}";
+            } else return fail("unexpected qos continuation");
         } else {
             const auto manage = [&](const char *operation, const std::string &payload) {
                 const auto arguments = "{\"candidate_id\":\"lo0:127.0.0.1\",\"operation\":" + quote(operation) +

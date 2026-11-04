@@ -64,6 +64,76 @@ fn device_features(payload: const u8[:]) -> i64 {
     }
     return mask;
 }
+// A qdisc profile is a closed vocabulary, validated before any device I/O.
+// The native adapter rechecks every bound independently of this caller.
+fn device_qos_profile(payload: const u8[:], profile: QosProfile&) -> bool {
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let root, err = json::parse(payload, doc, decoded);
+    let names: const u8[:][..4] = ["bandwidth_kbps", "interface", "mode", "overhead_bytes"];
+    if !root || !no_unknown(root, names) { return false; }
+    match root.val { Obj o => { if o.count != names.len { return false; } }, _ => { return false; }, }
+    let bandwidth, b = json::as_i64(json::member(root, "bandwidth_kbps"));
+    let iface, i = json::as_string(json::member(root, "interface"));
+    let mode, m = json::as_string(json::member(root, "mode"));
+    let overhead, h = json::as_i64(json::member(root, "overhead_bytes"));
+    if !b || !i || !m || !h { return false; }
+    if bandwidth < 256 || bandwidth > 100000 || overhead < 0 || overhead > 200 { return false; }
+    if iface != "eth0" && iface != "ppp0" { return false; }
+    if mode != "cake" && mode != "fq_codel" { return false; }
+    profile.bandwidth_kbps = bandwidth;
+    profile.interface_id = iface;
+    profile.mode = mode;
+    profile.overhead_bytes = overhead;
+    return true;
+}
+// A qdisc change is an apply-class effect; undoing it is restore-class. The
+// owner's existing grants gate both, so QoS cannot bypass a denied apply.
+fn device_qos(d: DeviceState&, operation: const u8[:], payload: const u8[:]) -> DeviceToolResult {
+    if !d.setup_approved { return device_tool_rejected("standing_device_permission_required"); }
+    let grant = if operation == "apply_qos" { "apply" } else { "restore" };
+    let refused = owner_admit(grant, 0);
+    if refused.len > 0 { return device_tool_rejected(refused); }
+    // The qdisc baseline lives inside an owned recovery directory; without one
+    // there is nothing Continuum can prove it restored.
+    if d.phase != "enrolled" && d.phase != "baseline_applied" {
+        return device_tool_rejected("owned_baseline_required");
+    }
+    if d.recovery_directory.len == 0 { return device_tool_rejected("owned_baseline_required"); }
+    var profile = QosProfile {};
+    if operation == "apply_qos" {
+        if !device_qos_profile(payload, profile) { return device_tool_rejected("invalid_qos_profile"); }
+    } else if payload.len != 0 {
+        return device_tool_rejected("unexpected_operation_payload");
+    }
+    let observed = device_inventory(d);
+    if !observed.authenticated || !device_identity(d, observed.receipt) {
+        return device_tool_rejected(if observed.authenticated { d.reason } else { observed.reason });
+    }
+    let op = if operation == "restore_qos" { "restore" } else { "apply" };
+    var raw: u8[>..] = [];
+    let attempted = true;
+    let ok = commission_qos(d.connection, d.recovery_directory, true, op, profile, raw, true);
+    if !ok {
+        d.reason = "qos_operation_unresolved_inspect_before_retry";
+        if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }
+        return DeviceToolResult { receipt: if raw.len > 0 && raw.len <= 8192 { raw } else { discovery_rejected(d.reason) }, mutation_attempted: attempted };
+    }
+    if !device_identity(d, raw) {
+        device_save(d);
+        return DeviceToolResult { receipt: discovery_rejected(d.reason), mutation_attempted: attempted };
+    }
+    var doc: json::Node[>..] = [];
+    var decoded: u8[>..] = [];
+    let receipt, err = json::parse(raw, doc, decoded);
+    let verified, v = json::as_bool(json::member(receipt, "qos_verified"));
+    if !verified || !v {
+        return DeviceToolResult { receipt: discovery_rejected("qos_readback_unverified"), mutation_attempted: attempted };
+    }
+    if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }
+    if raw.len > 8192 { return DeviceToolResult { receipt: discovery_rejected("device_receipt_over_bound"), mutation_attempted: attempted }; }
+    return DeviceToolResult { receipt: raw, mutation_attempted: attempted, ok: true };
+}
 fn device_dispatch(directory: const u8[:], d: DeviceState&, response: ModelResult) -> DeviceToolResult {
     if response.tool != ToolName.ManageDevice && response.tool != ToolName.InspectSystem {
         return device_tool_rejected("physical_actuation_unqualified");
@@ -120,6 +190,33 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
         d.knowledge = payload;
         if !device_save(d) { return device_tool_rejected("device_context_not_durable"); }
         return DeviceToolResult { receipt: "{\"status\":\"completed\",\"knowledge_saved\":true}", ok: true };
+    }
+    if operation == "capabilities" {
+        // Read-only architecture description. The device reports capability
+        // classes; core never names a vendor key or an optional-service list.
+        if payload.len != 0 { return device_tool_rejected("unexpected_operation_payload"); }
+        let observed = device_inventory(d);
+        if !observed.authenticated || !device_identity(d, observed.receipt) {
+            return device_tool_rejected(if observed.authenticated { d.reason } else { observed.reason });
+        }
+        var raw: u8[>..] = [];
+        if !commission_request(d.connection, "capabilities", "", false, raw, true) {
+            return DeviceToolResult { receipt: if raw.len > 0 && raw.len <= 8192 { raw } else { discovery_rejected("capabilities_unavailable") }, mutation_attempted: false };
+        }
+        var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
+        let receipt, err = json::parse(raw, doc, decoded);
+        let identity = json::member(receipt, "identity");
+        let product, p = json::as_string(json::member(identity, "productid"));
+        let mac, m = json::as_string(json::member(identity, "mac"));
+        if !receipt || !identity || !p || !m || product != d.productid || mac != d.mac {
+            return device_tool_rejected("capability_identity_mismatch");
+        }
+        if raw.len > 8192 { return device_tool_rejected("device_receipt_over_bound"); }
+        return DeviceToolResult { receipt: raw, ok: true };
+    }
+    if operation == "apply_qos" || operation == "restore_qos" {
+
+        return device_qos(d, operation, payload);
     }
     if operation != "inspect" && operation != "enroll" && operation != "runtime" &&
             operation != "apply" && operation != "restore" && operation != "verify" {

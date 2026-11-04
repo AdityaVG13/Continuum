@@ -84,6 +84,46 @@ def device_command():
             intended = (process / "intended").read_text().strip()
             if intended in names:
                 (process / "comm").write_text((intended if enabled else "stopped") + "\n")
+    elif name == "tc":
+        # Modeled kernel qdisc state, not synthetic timing numbers. The real
+        # generated program runs; only the applet is substituted. Absence is
+        # explicit data so the capability probe cannot masquerade as success.
+        if os.environ.get("CT_COMMISSION_DEVICE_TC") == "absent":
+            raise SystemExit(127)
+        state = root / "qdisc-eth0"
+        default = ("qdisc pfifo_fast 0: root refcnt 2 bands 3 "
+                   "priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1\n")
+        if args == ["-V"]:
+            print("tc utility, iproute2-6.1.0")
+        elif args[:3] == ["qdisc", "show", "dev"] and len(args) == 4:
+            print(state.read_text() if state.is_file() else default, end="")
+        elif args[:3] == ["qdisc", "replace", "dev"] and len(args) >= 5:
+            assert args[3] == "eth0" and args[4] == "root", "unsupported modeled qdisc"
+            spec = args[5:]
+            if spec[:1] == ["cake"]:
+                assert spec[1] == "bandwidth" and spec[3] == "overhead", spec
+                assert spec[2].endswith("kbit"), spec
+                rate = int(spec[2].removesuffix("kbit"))
+                clamp = os.environ.get("CT_COMMISSION_DEVICE_QDISC_CLAMP")
+                if clamp:
+                    rate = min(rate, int(clamp))
+                # tc prints rates with %g in the largest unit, so a 90000kbit
+                # request reads back as "90Mbit"; the adapter must normalize.
+                shown = (f"{rate / 1000:g}Mbit" if rate >= 1000 else f"{rate:g}Kbit")
+                state.write_text(
+                    "qdisc cake 8001: root refcnt 2 bandwidth " + shown +
+                    " overhead " + spec[4] + " diffserv3 triple-isolate nonat\n")
+            elif spec[:1] == ["fq_codel"]:
+                assert spec[1] == "limit", spec
+                state.write_text("qdisc fq_codel 8002: root refcnt 2 limit " + spec[2] +
+                                 "p flows 1024 quantum 1514 target 5ms interval 100ms\n")
+            else:
+                raise AssertionError("unsupported modeled qdisc mode")
+        elif args[:3] == ["qdisc", "del", "dev"] and len(args) == 5:
+            assert args[3] == "eth0" and args[4] == "root"
+            state.write_text(default)
+        else:
+            raise AssertionError("unsupported modeled tc command: " + repr(args))
     else:
         raise AssertionError("unsupported modeled device command")
 
@@ -163,6 +203,21 @@ def main():
         assert inventory["phase"] == "inventory" and inventory["authenticated"] is True
         assert inventory["settings"]["enable_samba"] == "1"
         assert inventory["settings"]["enable_webdav"] == "2"
+        # The device reports a classed capability graph as its own read-only
+        # surface; the product's vocabulary is these classes, not its keys.
+        graph_run = subprocess.run([binary], env=dict(env, COMMISSION_ACTION="capabilities"),
+                                   text=True, capture_output=True, timeout=30)
+        assert graph_run.returncode == 0, graph_run.stdout + graph_run.stderr
+        graph = [json.loads(line) for line in graph_run.stdout.splitlines() if line.startswith("{")][-1]
+        caps = {c["id"]: c for c in graph["capabilities"]}
+        assert graph["phase"] == "capabilities" and graph["identity"]["productid"] == inventory["settings"]["productid"]
+        assert caps["samba"]["class"] == "file_sharing" and caps["samba"]["settable"] is True
+        assert caps["ftp"]["state"] == "enabled" and caps["samba"]["state"] == "enabled"
+        assert caps["vendor_qos"]["class"] == "traffic_control" and caps["vendor_qos"]["settable"] is False
+        assert caps["vendor_firmware"]["class"] == "update_channel" and caps["vendor_firmware"]["state"] == "present"
+        assert caps["ssh"]["class"] == "remote_access" and caps["ssh"]["settable"] is False
+        assert all(c["class"] in ("file_sharing", "media_server", "traffic_control", "remote_access", "update_channel")
+                   for c in graph["capabilities"]), "capability classes are the closed product vocabulary"
         assert inventory["commissioned"] is False, "inventory is not commissioning"
         assert read_device() == before, "inspection must not change settings"
         assert PASSWORD not in result.stdout + result.stderr
@@ -330,6 +385,79 @@ def main():
         assert read_device() == before
         transcript.append({"action": "bounded_runtime_retention", "files": sorted(retained_files),
                            "latest_receipt": latest})
+
+        # QoS: the device's own `tc qdisc show` readback is the proof. A missing
+        # tc applet is a typed refusal (no mutation), and restore must return
+        # the interface to its kernel-default root qdisc.
+        qos = dict(env, COMMISSION_ACTION="qos", COMMISSION_QOS_OP="apply",
+                   COMMISSION_QOS_IFACE="eth0", COMMISSION_QOS_MODE="cake",
+                   COMMISSION_QOS_KBPS="90000", COMMISSION_QOS_OVERHEAD="18")
+        absent = subprocess.run([binary], env=dict(qos, CT_COMMISSION_DEVICE_TC="absent"),
+                                text=True, capture_output=True, timeout=60)
+        assert absent.returncode != 0 and "qdisc_tool_unavailable" in absent.stdout, (
+            "a device without tc must refuse the qdisc profile: " + absent.stdout + absent.stderr)
+        assert not (device / "qdisc-eth0").exists(), "an unavailable tc must not write a qdisc"
+        # A root managed by vendor QoS or another agent is refused, not stomped.
+        (device / "qdisc-eth0").write_text("qdisc htb 1: root refcnt 2 r2q 10\n")
+        foreign = subprocess.run([binary], env=qos, text=True, capture_output=True, timeout=60)
+        assert foreign.returncode != 0 and "qdisc_root_already_managed" in foreign.stdout, (
+            "a foreign managed root must be refused: " + foreign.stdout + foreign.stderr)
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc htb"), (
+            "a refused profile must not touch the managed root")
+        (device / "qdisc-eth0").write_text(
+            "qdisc pfifo_fast 0: root refcnt 2 bands 3\n")
+        applied_qos = subprocess.run([binary], env=qos, text=True, capture_output=True, timeout=60)
+        assert applied_qos.returncode == 0, applied_qos.stdout + applied_qos.stderr
+        qos_receipt = [json.loads(line) for line in applied_qos.stdout.splitlines()
+                       if line.startswith("{")][-1]
+        assert qos_receipt["phase"] == "qos_applied" and qos_receipt["qos_verified"] is True
+        assert qos_receipt["qos_mode"] == "cake" and qos_receipt["bandwidth_kbps"] == 90000
+        assert qos_receipt["rate_readback"] == "verified"
+        qdisc_text = (device / "qdisc-eth0").read_text()
+        assert "cake" in qdisc_text and "bandwidth 90Mbit" in qdisc_text and "overhead 18" in qdisc_text
+        assert read_device() == before, "a qdisc profile must not rewrite service flags"
+        for bad, reason in (({"COMMISSION_QOS_KBPS": "100001"}, "qos_bandwidth_out_of_range"),
+                            ({"COMMISSION_QOS_IFACE": "lan0"}, "qos_interface_unsupported"),
+                            ({"COMMISSION_QOS_MODE": "sfq"}, "qos_mode_unsupported"),
+                            ({"COMMISSION_QOS_OVERHEAD": "201"}, "qos_overhead_out_of_range")):
+            refused_qos = subprocess.run([binary], env=dict(qos, **bad),
+                                         text=True, capture_output=True, timeout=30)
+            assert refused_qos.returncode != 0 and reason in refused_qos.stdout, (
+                reason + ": " + refused_qos.stdout + refused_qos.stderr)
+            assert (device / "qdisc-eth0").read_text() == qdisc_text, (
+                "an invalid profile must be refused before any device I/O")
+        # The device may not honor the requested rate (line-rate clamp). An
+        # adapter that echoes its own request instead of reading the device
+        # would report success here.
+        clamped = subprocess.run([binary], env=dict(qos, CT_COMMISSION_DEVICE_QDISC_CLAMP="50000"),
+                                 text=True, capture_output=True, timeout=60)
+        assert clamped.returncode != 0 and "qos_rate_readback_mismatch" in clamped.stdout, (
+            "an unhonored rate must fail the readback: " + clamped.stdout + clamped.stderr)
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), (
+            "an unverified qdisc must be rolled back to the kernel default")
+        fq = subprocess.run([binary], env=dict(qos, COMMISSION_QOS_MODE="fq_codel",
+                                               COMMISSION_QOS_KBPS="80000"),
+                            text=True, capture_output=True, timeout=60)
+        assert fq.returncode == 0, fq.stdout + fq.stderr
+        assert "fq_codel" in (device / "qdisc-eth0").read_text()
+        restored_qos = subprocess.run([binary], env=dict(qos, COMMISSION_QOS_OP="restore"),
+                                      text=True, capture_output=True, timeout=60)
+        assert restored_qos.returncode == 0, restored_qos.stdout + restored_qos.stderr
+        restore_receipt = [json.loads(line) for line in restored_qos.stdout.splitlines()
+                           if line.startswith("{")][-1]
+        assert restore_receipt["phase"] == "qos_restored" and restore_receipt["qos_verified"] is True
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), (
+            "restore must return the interface to its kernel-default root qdisc")
+        idle = subprocess.run([binary], env=dict(qos, COMMISSION_QOS_OP="restore"),
+                              text=True, capture_output=True, timeout=60)
+        assert idle.returncode == 0, idle.stdout + idle.stderr
+        idle_receipt = [json.loads(line) for line in idle.stdout.splitlines()
+                        if line.startswith("{")][-1]
+        assert idle_receipt["changed"] is False, "a repeated restore must be idempotent"
+        assert read_device() == before
+        transcript.append({"action": "qos_apply_restore", "apply": qos_receipt,
+                           "restore": restore_receipt, "idle": idle_receipt})
+        print("COMMISSION_QOS_GREEN", directory)
         print("COMMISSION_APPLY_RESTORE_GREEN", directory)
         if unified:
             integrated_env.update(CT_COMMISSION_DEVICE_ROOT=str(device), CT_COMMISSION_DEVICE_PORT=str(port),
@@ -357,6 +485,28 @@ def main():
                                   env=dict(integrated_env, CONTINUUM_AGENT_FIXTURE="chat"),
                                   capture_output=True, text=True, timeout=15)
             assert chat.returncode == 0 and json.loads(chat.stdout)["summary"] == "FTP retained; no router reboot.", "owner dialogue must reuse the selected device's persisted knowledge and previous exchange: " + chat.stdout + chat.stderr
+
+            # The same guarded dispatcher applies a bounded qdisc profile and
+            # restores it: model proposal -> Goose bounds -> owner grant ->
+            # native tc command -> device readback -> restore. This runs after
+            # the dialogue check because it becomes the newest exchange.
+            after_setup = read_device()
+            qos_talk = subprocess.run([unified, "--talk", "Apply a CAKE profile to the WAN and verify it."],
+                env=dict(integrated_env, CONTINUUM_AGENT_FIXTURE="qos"),
+                capture_output=True, text=True, timeout=180)
+            assert qos_talk.returncode == 0, (
+                "Meta must be able to apply and restore a verified qdisc profile: " +
+                qos_talk.stdout + qos_talk.stderr)
+            qos_report = json.loads(qos_talk.stdout)
+            assert qos_report["status"] == "completed" and qos_report["model_calls"] == 3
+            assert qos_report["mutation_attempted"] is True
+            assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), (
+                "the model-driven restore must leave the kernel-default root qdisc")
+            qos_record = json.loads(next((directory / "config").glob("**/qos-last.json")).read_text())
+            assert qos_record["phase"] == "qos_restored" and qos_record["changed"] is True, (
+                "the qdisc record must survive as durable evidence, not only in the model transcript")
+            assert read_device() == after_setup, "qos must not rewrite service flags"
+            transcript.append({"action": "integrated_qos", "report": qos_report})
 
             # Programs must run through the real dispatcher without a model call,
             # survive process boundaries, and never smuggle reboot/shell authority.

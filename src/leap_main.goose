@@ -107,6 +107,22 @@ fn main() {
     let commission_action = env_into("COMMISSION_ACTION", "");
     if commission_action.len > 0 {
         let directory = env_into("COMMISSION_DIR", "");
+        if commission_action == "qos" {
+            var qos = continuum::QosProfile {};
+            qos.bandwidth_kbps = env_i64("COMMISSION_QOS_KBPS", 0);
+            qos.overhead_bytes = env_i64("COMMISSION_QOS_OVERHEAD", 0);
+            let qos_iface = env_into("COMMISSION_QOS_IFACE", "eth0");
+            if qos_iface.len <= 8 { qos.interface_id.append(qos_iface); }
+            let qos_mode = env_into("COMMISSION_QOS_MODE", "cake");
+            if qos_mode.len <= 16 { qos.mode.append(qos_mode); }
+            let qos_op = env_into("COMMISSION_QOS_OP", "apply");
+            var receipt: u8[>..] = [];
+            let ok = continuum::commission_qos(cfg, directory,
+                env_flag("COMMISSION_EXECUTE", false), qos_op, qos, receipt);
+            if receipt.len > 0 { print(receipt); }
+            if !ok { exit(1); }
+            return;
+        }
         if !continuum::commission_run(cfg, commission_action, directory,
                 env_flag("COMMISSION_EXECUTE", false), env_flag("COMMISSION_APPROVE_REBOOT", false)) { exit(1); }
         return;
