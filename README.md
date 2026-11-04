@@ -175,19 +175,21 @@ that backs it.
 
 ## Quickstart
 
-### Install a release
+### Install
 
-macOS arm64 archives are published under
-[Releases](https://github.com/AdityaVG13/Continuum/releases). The binary opens
-`docs/prompts`, `schemas` and `fixtures/corpus` by relative path, so unpack it
-and run `bin/continuum` from the unpacked root, or install it under
-`~/.local/share/continuum` with a launcher on `PATH` as the archive's
-`INSTALL.txt` describes. Confirm the build with `continuum --version`.
+On an Apple silicon Mac, paste this into Terminal:
+
+```sh
+curl -fsSL https://github.com/AdityaVG13/Continuum/releases/latest/download/install.sh | sh
+```
+
+It downloads the latest release, checks its SHA-256, and installs `continuum`
+into `/usr/local/bin` (asking for your password once if needed). Then type
+`continuum`. From a checkout, `make install` does the same into `~/.local`.
 
 ### Interactive setup
 
-Run `make install` once; it puts `continuum` on `PATH` (`~/.local/bin`).
-Then **`continuum` with no arguments is the whole entry point.** It reads this
+**`continuum` with no arguments is the whole entry point.** It reads this
 host at startup (local interfaces/routes only, no scan and no provider call) and
 opens on a **setup wizard**: one step per screen, one `[Enter]` per step, and
 each screen states exactly what that step will do.
@@ -208,8 +210,9 @@ are in that path. `[Esc]` quits; `[a]` opens the five panels (Overview, Network,
 Device, Programs, Resident) for the receipts and evidence, and `[Esc]` there
 returns to the wizard.
 
-Several default-route candidates are never guessed: binding one of several
-stays an explicit `[p]` choice. A unit that is already configured is never
+Step 1 keeps looking on its own: plug in a cable or pick the router's Wi-Fi in
+the menu bar and it appears. Only a router Continuum can drive is marked for
+`[Enter]`; anything else stays an explicit numbered choice. A unit that is already configured is never
 factory-enrolled: the ceremony refuses without writing, and the failure screen
 offers `[p]` to take the unit over with the admin password it already uses --
 read hidden, stored in the OS vault, and proven by a protected read.

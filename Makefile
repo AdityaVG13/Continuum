@@ -21,6 +21,21 @@ install: $(BUILD)/continuum
 	cp -R fixtures/corpus $(PREFIX)/share/continuum/fixtures/
 	@printf '%s\n' "installed $(PREFIX)/bin/continuum and $(PREFIX)/share/continuum"
 
+# Release archive: the same prefix tree `install` writes, plus install.sh, the
+# one-line installer the release page points at. Asset names carry no version
+# so releases/latest/download/<name> always resolves.
+DIST := $(BUILD)/dist
+.PHONY: install dist
+dist: $(BUILD)/continuum
+	@test -n "$(MACOS_SIGN_IDENTITY)" || { printf '%s\n' 'dist: set MACOS_SIGN_IDENTITY; a release binary is signed'; exit 1; }
+	$(MAKE) --no-print-directory install PREFIX=$(abspath $(DIST))/continuum-macos-arm64
+	/usr/bin/codesign --force --sign "$(MACOS_SIGN_IDENTITY)" --identifier org.continuum.controller --timestamp=none $(DIST)/continuum-macos-arm64/bin/continuum
+	/usr/bin/codesign --verify --strict $(DIST)/continuum-macos-arm64/bin/continuum
+	tar -C $(DIST) -czf $(DIST)/continuum-macos-arm64.tar.gz continuum-macos-arm64
+	install -m 0755 install.sh $(DIST)/install.sh
+	cd $(DIST) && shasum -a 256 continuum-macos-arm64.tar.gz install.sh > SHA256SUMS.txt
+	@printf '%s\n' "release assets in $(DIST): continuum-macos-arm64.tar.gz install.sh SHA256SUMS.txt"
+
 all: help
 
 $(BUILD):

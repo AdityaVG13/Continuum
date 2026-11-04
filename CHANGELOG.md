@@ -3,6 +3,30 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.0] - 2026-11-04
+
+### Changed
+
+- **One command, one key.** `continuum` opens the setup wizard and every step
+  advances on `Enter`. Step 1 keeps looking for the router by itself: plug in a
+  cable or pick the router's Wi-Fi in the menu bar (a factory-reset ASUS shows
+  as an open `ASUS_XX` network) and it appears. Only a router Continuum can
+  drive is marked, so a Mac cabled to its ISP gateway and on the router's Wi-Fi
+  binds the router, not the gateway. The typed Wi-Fi join (`w`, name, `o`) is
+  gone.
+- **Pick the Meta model from the key's own catalog**, with Meta's rate card and
+  the most one setup step can cost at each reasoning effort. Spark 1.3 at xhigh
+  is preselected.
+- The Meta key is saved in the macOS Keychain on `Enter` (`n` keeps it for the
+  session only), so the next run needs no key.
+
+### Install
+
+- One line, no checkout or build:
+  `curl -fsSL https://github.com/AdityaVG13/Continuum/releases/latest/download/install.sh | sh`
+  installs `continuum` into `/usr/local/bin` (prompts and schemas in
+  `/usr/local/share/continuum`) after checking the archive's SHA-256.
+
 ## [0.1.0] - 2026-11-04
 
 First release. Continuum is an owner-controlled management plane for a router
