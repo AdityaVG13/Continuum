@@ -146,9 +146,9 @@ fn meta_role_model(config: ModelConfig, role_id: const u8[:]) -> u8[>..] {
 
 fn meta_role_prompt(role_id: const u8[:]) -> const u8[:] {
     if role_id == "task" {
-        return "prompts/workload.md";
+        return "docs/prompts/workload.md";
     }
-    return "prompts/controller.md";
+    return "docs/prompts/controller.md";
 }
 
 // First call of an incident or task turn: envelope, real prompt, validated
@@ -201,7 +201,7 @@ fn submit_tool_result(config: ModelConfig, request_id: const u8[:],
         return meta_failed("continuation response id invalid");
     }
     var instructions: u8[>..] = [];
-    if !read_file("prompts/controller.md", instructions) {
+    if !read_file("docs/prompts/controller.md", instructions) {
         return meta_failed("meta prompt file unavailable");
     }
     var tools: u8[>..] = [];

@@ -34,14 +34,14 @@ fn device_agent_tools(d: DeviceState) -> u8[>..] {
 }
 fn device_agent_instructions() -> u8[>..] {
     var out: u8[>..] = [];
-    if !read_file("prompts/device.md", out) || out.len > 8192 { return []; }
+    if !read_file("docs/prompts/device.md", out) || out.len > 8192 { return []; }
     return out;
 }
 fn device_skill(name: const u8[:]) -> DeviceToolResult {
     var path: u8[..128] = "";
-    if name == "commissioning" { path = "prompts/workflows/commissioning.md"; }
-    else if name == "optimization" { path = "prompts/workflows/optimization.md"; }
-    else if name == "programs" { path = "prompts/workflows/programs.md"; }
+    if name == "commissioning" { path = "docs/prompts/workflows/commissioning.md"; }
+    else if name == "optimization" { path = "docs/prompts/workflows/optimization.md"; }
+    else if name == "programs" { path = "docs/prompts/workflows/programs.md"; }
     else { return device_tool_rejected("unknown_workflow_skill"); }
     var content: u8[>..] = [];
     if !read_file(path, content) || content.len > 4096 { return device_tool_rejected("workflow_skill_unavailable"); }

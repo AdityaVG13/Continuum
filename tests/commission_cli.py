@@ -299,7 +299,7 @@ def main():
             (process / "comm").write_text(name + "\n")
             (process / "intended").write_text(name + "\n")
             (process / "status").write_text(f"Name:\t{name}\nVmRSS:\t{rss} kB\n")
-        for command in ("nvram", "service", "id", "nohup", "reboot"):
+        for command in ("nvram", "service", "id", "nohup", "reboot", "tc"):
             (device / "bin" / command).symlink_to(Path(__file__).resolve())
         request("/applyapp.cgi", {
             "firmver": "3.0.0.4", "buildno": "test", "extendno": "1",
@@ -720,7 +720,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if Path(sys.argv[0]).name in ("nvram", "service", "id", "nohup", "reboot"):
+    if Path(sys.argv[0]).name in ("nvram", "service", "id", "nohup", "reboot", "tc"):
         device_command()
     else:
         main()

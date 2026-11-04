@@ -30,8 +30,9 @@ def check(ok, message):
 def sandbox(name):
     directory = ARTIFACT / name
     directory.mkdir()
-    for entry in ("fixtures", "schemas", "prompts"):
+    for entry in ("fixtures", "schemas"):
         shutil.copytree(ROOT / entry, directory / entry)
+    shutil.copytree(ROOT / "docs" / "prompts", directory / "docs" / "prompts")
     config = directory / "config"
     config.mkdir()
     return directory, dict(BASE, XDG_CONFIG_HOME=str(config))
@@ -77,7 +78,7 @@ check(s["model_source"] == "committed_artifact" and s["actuator"] == "none"
       and s["observation_provenance"] == "none",
       "resume reports artifact recovery, not a new model or network session")
 
-for relative in ("fixtures/corpus/security-review.md", "prompts/workload.md", "schemas/workload-result.schema.json"):
+for relative in ("fixtures/corpus/security-review.md", "docs/prompts/workload.md", "schemas/workload-result.schema.json"):
     path = directory / relative
     original = path.read_text()
     path.write_text(original + "\n ")

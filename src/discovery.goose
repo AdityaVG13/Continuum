@@ -88,7 +88,7 @@ fn run_discovery(config: ModelConfig) -> DiscoveryReport {
     }
     var instructions: u8[>..] = [];
     var tools: u8[>..] = [];
-    if !read_file("prompts/discovery.md", instructions) || !read_file("schemas/discovery-tools.json", tools) {
+    if !read_file("docs/prompts/discovery.md", instructions) || !read_file("schemas/discovery-tools.json", tools) {
         report.reason = "discovery prompt/tools unavailable; run from the Continuum checkout";
         return report;
     }

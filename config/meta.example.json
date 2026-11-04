@@ -8,7 +8,7 @@
   "controller": {
     "required": true,
     "model_id": "muse-wonder-1.0",
-    "prompt_file": "prompts/controller.md",
+    "prompt_file": "docs/prompts/controller.md",
     "request_deadline_ms": 10000,
     "max_output_tokens": 2048,
     "reasoning_effort": "low",
@@ -18,7 +18,7 @@
   "workload": {
     "required": true,
     "model_id": "muse-wonder-1.0",
-    "prompt_file": "prompts/workload.md",
+    "prompt_file": "docs/prompts/workload.md",
     "request_deadline_ms": 30000,
     "max_output_tokens": 4096,
     "reasoning_effort": "medium"

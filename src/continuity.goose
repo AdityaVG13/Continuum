@@ -17,7 +17,7 @@ struct TaskBinding {
 fn task_binding(context: TaskContext, cfg: ModelConfig) -> TaskBinding {
     let input = prepare_task_input(context);
     var prompt: u8[>..] = []; var schema: u8[>..] = [];
-    if !input.ok || !read_file("prompts/workload.md", prompt) || prompt.len > 8192
+    if !input.ok || !read_file("docs/prompts/workload.md", prompt) || prompt.len > 8192
             || !read_file("schemas/workload-result.schema.json", schema) || schema.len > 8192 {
         return TaskBinding {};
     }

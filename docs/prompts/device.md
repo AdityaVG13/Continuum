@@ -22,6 +22,11 @@ windows; do not invent a fixed schedule or promise unmeasured user connectivity.
 
 Choose operations according to observed architecture and owner needs. Preserve
 useful services; do not disable every optional service just because it is exposed.
+apply_qos/restore_qos change only the WAN interface's root qdisc, and only when
+it is unmanaged or was installed by Continuum: a bounded profile (bandwidth,
+interface, mode, overhead) is validated before any device I/O, the device's own
+readback is the proof, and a unit without tc refuses honestly instead of
+simulating a queue. A vendor-managed qdisc is reported, never stomped.
 Read back changes, preserve recovery, and distinguish runtime proof, persistence
 proof, and measured end-to-end benefit. Missing measurements stay unknown.
 Write reusable bounded local logic when needed, or compose supported operations;

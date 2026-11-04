@@ -309,18 +309,17 @@ separates this working slice from the larger unproven product thesis.
 
 | Location | Contents |
 | --- | --- |
-| `docs/SPECIFICATION.md` | Product thesis, architecture, lifecycle, ownership, evaluation. |
+| `docs/SPECIFICATION.md` | Product thesis, architecture, lifecycle, ownership modes, boundaries. |
 | `docs/MODEL_INTEGRATION.md` | Meta roles, Responses protocol usage, tool loop, budgets, failure policy. |
-| `docs/BUILD_PLAN.md` | Ordered tickets (C01-C18) and exit gates. |
+| `docs/STATUS.md` | What is implemented, what is not, and the evidence for each. |
 | `docs/DEMO_RUNBOOK.md` | Three-minute stage sequence and required live proof. |
-| `docs/EVALUATION.md`, `PITCH.md` | Comparisons, metrics proposal, positioning. |
-| `prompts/`, `schemas/`, `config/`, `fixtures/` | Controller/workload prompts, wire contracts, example configs, synthetic fixtures. |
+| `docs/IMPLEMENTATION_MAP.md`, `docs/LAB.md` | Source-to-capability map; what the lab proves and does not. |
+| `docs/prompts/`, `schemas/`, `config/`, `fixtures/` | Controller/workload/device/discovery prompts, wire contracts, example configs, synthetic fixtures. |
 | `src/` | Goose implementation: sim, guardian, actuator, tool binding, Meta provider, onboarding planner + leap ceremony. |
 | `src/main.build`, `tests/*.build` | Toolchain sidecars linking the native sources into each binary. |
 | `native/` | C ABI (`continuum_native.h`), router HTTP backend, Meta HTTPS adapter, ASUS onboarding adapter, macOS keychain/Wi-Fi host backend, C++ fallback stubs. |
 | `tests/` | Contract suites, the C++ virtual-router double (`router_double.cpp`), native harnesses, and the manual probes. |
 | `verification/` | Dated gate log and artifact summary. |
-| `tools/render_spec.py` | Optional PDF publishing utility (documentation tooling only). |
 
 ## Claim discipline
 

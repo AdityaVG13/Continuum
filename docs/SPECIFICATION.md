@@ -358,7 +358,7 @@ Coding must coexist with the transport's congestion-control obligations. When qu
 
 ### Candidate native stack and build decision
 
-MsQuic and an RFC 6330-compatible native RaptorQ implementation are research candidates behind the C ABI. Pin their exact versions, review licenses and buffer lifetimes, and test metadata interoperability before selecting them. This repository does not vendor a codec or claim a QUIC connection. Detailed selection gates and alternatives are in ADVANCED_ROADMAP.md.
+MsQuic and an RFC 6330-compatible native RaptorQ implementation are research candidates behind the C ABI. Pin their exact versions, review licenses and buffer lifetimes, and test metadata interoperability before selecting them. This repository does not vendor a codec or claim a QUIC connection. Detailed selection gates and alternatives are tracked outside the published documentation set.
 
 The decisive advanced scene is a real evidence object crossing the controlled leg under loss, reconstructing exactly, then enabling an actual Meta workload step. A local encode/decode demonstration is a useful codec test but is not this scene.
 
@@ -407,7 +407,7 @@ A falsifying result is valuable: if static SQM solves the problem equally well, 
 
 ## 16. Build sequence and acceptance gates
 
-BUILD_PLAN.md provides ticket IDs, dependencies, outputs, and exit checks. The sequence puts actual Meta integration at the beginning. The core model must not be postponed until after an extensive infrastructure build.
+The build sequence provides ticket IDs, dependencies, outputs, and exit checks. The sequence puts actual Meta integration at the beginning. The core model must not be postponed until after an extensive infrastructure build.
 
 | Gate | Required artifact before moving on |
 | --- | --- |
@@ -426,7 +426,7 @@ If the available time is shorter than the assumed ten days, reduce optional feat
 
 ## 17. Delivered files and implementation status
 
-This repository is the complete handoff. Start with README.md and this specification, then MODEL_INTEGRATION.md, IMPLEMENTATION_MAP.md, and BUILD_PLAN.md. The schemas and prompts provide exact starting interfaces. The synthetic corpus and examples make the desired behavior reviewable before live integration is complete.
+This repository is the complete handoff. Start with README.md and this specification, then MODEL_INTEGRATION.md and IMPLEMENTATION_MAP.md. The schemas and prompts provide exact starting interfaces. The synthetic corpus and examples make the desired behavior reviewable before live integration is complete.
 
 The Goose modules and C++ fallback expose explicit results for what is not yet implemented. The status entry point reports the implementation ledger; sim, contract suites and the virtual-router loop run green. The Meta HTTPS adapter is implemented but has made no live call. The native boundary is a declared C ABI with a working router backend, a working Meta backend, and stubs where backends are still pending - not a finished actuator for every path.
 
@@ -462,6 +462,6 @@ Primary technical sources checked or carried into the research register include:
 - cake-autorate implementation: https://github.com/lynxthecat/cake-autorate
 - MsQuic repository and documentation: https://github.com/microsoft/msquic
 
-These sources support the relevant protocol and implementation choices; they do not validate Continuum's proposed performance. MODEL_INTEGRATION.md and SOURCES.md separate documented provider behavior from account-specific preflight and project design decisions. ADVANCED_ROADMAP.md explains the research status of optional layers.
+These sources support the relevant protocol and implementation choices; they do not validate Continuum's proposed performance. MODEL_INTEGRATION.md separates documented provider behavior from account-specific preflight and project design decisions.
 
 The remaining decisions are the actual event date and rules, approved Meta model/account, available Linux host and ownership scope, measured link capacities, team capacity, workload selection, UI technology, and whether any advanced extension fits after the core gates. Each has a concrete first-build decision point. None is silently converted into an implemented capability by this repository.
