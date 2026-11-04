@@ -81,7 +81,8 @@ fn program_steps(steps: json::Node?, p: DeviceProgram&) -> const u8[:] {
                 operation != "apply" && operation != "restore" && operation != "verify" {
             return "unsupported_program_step";
         }
-        if (operation == "apply" && device_features(payload) <= 0) || (operation != "apply" && payload.len > 0) {
+        var selection: u8[..128] = "";
+        if (operation == "apply" && device_selection(payload, selection).len > 0) || (operation != "apply" && payload.len > 0) {
             return "invalid_program_step_payload";
         }
         p.steps.push(ProgramStep { operation: operation, payload: payload });

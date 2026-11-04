@@ -313,7 +313,7 @@ fn device_request_reboot(d: DeviceState&) -> bool {
     d.phase = "reboot_pending";
     if !device_save(d) { return false; }
     var raw: u8[>..] = [];
-    let ok = commission_request(d.connection, "reboot", d.recovery_directory, true, raw, true, 0, true);
+    let ok = commission_request(d.connection, "reboot", d.recovery_directory, true, raw, true, "", true);
     d.reason = if ok { "owner_reboot_requested_verify_after_return" } else { "reboot_outcome_unknown_verify_before_retry" };
     return ok;
 }

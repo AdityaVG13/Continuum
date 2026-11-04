@@ -6,14 +6,15 @@
 
 using CommissionSnapshot = std::map<std::string, std::string>;
 struct CommissionFeature {
+    const char *id;
     const char *key, *stop, *start, *process1, *process2;
 };
 const CommissionFeature kCommissionFeatures[] = {
-    {"enable_samba", "stop_samba", "restart_samba", "smbd", "nmbd"},
-    {"enable_ftp", "stop_ftpd", "restart_ftpd", "vsftpd", ""},
-    {"dms_enable", "stop_dms", "restart_dms", "minidlna", ""},
-    {"daapd_enable", "stop_mt_daapd", "restart_mt_daapd", "mt-daapd", ""},
-    {"enable_webdav", "stop_webdav", "restart_webdav", "lighttpd", "webdav_client"},
+    {"samba", "enable_samba", "stop_samba", "restart_samba", "smbd", "nmbd"},
+    {"ftp", "enable_ftp", "stop_ftpd", "restart_ftpd", "vsftpd", ""},
+    {"dlna", "dms_enable", "stop_dms", "restart_dms", "minidlna", ""},
+    {"daap", "daapd_enable", "stop_mt_daapd", "restart_mt_daapd", "mt-daapd", ""},
+    {"webdav", "enable_webdav", "stop_webdav", "restart_webdav", "lighttpd", "webdav_client"},
 };
 const std::vector<std::string> kCommissionKeys = {
     "productid", "firmver", "buildno", "extendno", "lan_hwaddr",
@@ -609,15 +610,26 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
             selected.push_back(i);
         }
     } else {
-        for (size_t i = 0; i < sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]); ++i) {
-            bool allowed = false;
-            const auto &key = kCommissionFeatures[i].key;
-            if (!json_bool(body, key, allowed)) return CT_INVALID_ARGUMENT;
-            if (!allowed || current[key].empty()) continue; // unknown is not disabled
+        std::string disable;
+        if (!json_str(body, "disable", disable) || disable.empty() || disable.size() > 128)
+            return CT_INVALID_ARGUMENT;
+        size_t cursor = 0;
+        while (cursor <= disable.size()) {
+            size_t comma = disable.find(',', cursor);
+            std::string id = disable.substr(cursor, comma == std::string::npos ? std::string::npos : comma - cursor);
+            if (id.empty() || id.size() > 32) return CT_INVALID_ARGUMENT;
+            size_t index = sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]);
+            for (size_t i = 0; i < index; ++i)
+                if (id == kCommissionFeatures[i].id) index = i;
+            if (index == sizeof(kCommissionFeatures) / sizeof(kCommissionFeatures[0]))
+                return commission_fail(out, out_len, "capability_unknown");
+            const auto &key = kCommissionFeatures[index].key;
+            if (current[key].empty()) { cursor = comma == std::string::npos ? disable.size() + 1 : comma + 1; continue; }
             if (!commission_small_setting(current[key]))
                 return commission_fail(out, out_len, "unsupported_optional_service_value");
-            requested.push_back(i);
-            if (current[key] != "0") selected.push_back(i);
+            requested.push_back(index);
+            if (current[key] != "0") selected.push_back(index);
+            cursor = comma == std::string::npos ? disable.size() + 1 : comma + 1;
         }
         // The baseline is immutable, target-bound, non-secret and durable before
         // any write. The separate opaque vendor backup may contain credentials.

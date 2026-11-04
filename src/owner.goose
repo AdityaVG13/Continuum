@@ -57,7 +57,9 @@ fn owner_parse(text: const u8[:], policy: OwnerPolicy&) -> bool {
         candidate.allowed_operations.push(op);
     }
     for name in services {
-        if name != "enable_samba" && name != "enable_ftp" && name != "dms_enable" && name != "daapd_enable" && name != "enable_webdav" { return false; }
+        // Capability ids are device vocabulary, so a policy may protect any id
+        // the device reports. It cannot protect an empty or oversized token.
+        if name.len == 0 || name.len > 64 { return false; }
         candidate.protected_services.push(name);
     }
     candidate.protected_clients = clients; policy = candidate; return true;
@@ -99,14 +101,14 @@ fn owner_admit(operation: const u8[:], features: i64 = 0, direct_approval: bool 
     var allowed = direct_approval;
     for op in policy.allowed_operations { if op == operation { allowed = true; } }
     if !allowed { return if operation == "reboot" { "owner_reboot_approval_required" } else { "owner_policy_denied" }; }
-    if operation == "apply" {
-        let names: const u8[:][..5] = ["enable_samba", "enable_ftp", "dms_enable", "daapd_enable", "enable_webdav"];
-        var mask = features;
-        for name in names {
-            if mask % 2 == 1 { for required in policy.protected_services { if name == required { return "protected_service_required"; } } }
-            mask /= 2;
-        }
-    }
+    return "";
+}
+// Owner-protected capabilities are refused before any device I/O. The check is
+// by capability id, which the device reports; core knows no vendor key.
+fn owner_protects(id: const u8[:]) -> const u8[:] {
+    var policy = OwnerPolicy {};
+    if !owner_load(policy) { return "invalid_owner_policy"; }
+    for required in policy.protected_services { if required == id { return "protected_service_required"; } }
     return "";
 }
 fn owner_host_admit(policy: OwnerPolicy) -> const u8[:] {

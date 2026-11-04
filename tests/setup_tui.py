@@ -107,7 +107,7 @@ try:
                          ("Allow isolated local programs", "0"),
                          ("Allowed device operations", "runtime,verify"),
                          ("Protected users/devices", "workstation"),
-                         ("Services to preserve", "enable_ftp"),
+                         ("Capabilities to preserve", "ftp"),
                          ("Program slots", "2"),
                          ("Resolved program retention", "3"),
                          ("Program wall time", "500")):
@@ -119,7 +119,7 @@ try:
     owner_file = Path(ENV["XDG_CONFIG_HOME"]) / "continuum/device/owner.json"
     check(json.loads(owner_file.read_text()) == dict(schema_version=1,
           allowed_operations=["runtime", "verify"], execution_host="local", allow_host_programs=False,
-          protected_clients=["workstation"], protected_services=["enable_ftp"], max_programs=2,
+          protected_clients=["workstation"], protected_services=["ftp"], max_programs=2,
           program_retention_days=3, program_timeout_ms=500),
           "the owner can set authority, protected users and retention from setup without Meta")
     check(owner_file.stat().st_mode & 0o077 == 0, "owner permission state is private")

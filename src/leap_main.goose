@@ -124,7 +124,8 @@ fn main() {
             return;
         }
         if !continuum::commission_run(cfg, commission_action, directory,
-                env_flag("COMMISSION_EXECUTE", false), env_flag("COMMISSION_APPROVE_REBOOT", false)) { exit(1); }
+                env_flag("COMMISSION_EXECUTE", false), env_flag("COMMISSION_APPROVE_REBOOT", false),
+                env_into("COMMISSION_DISABLE", "")) { exit(1); }
         return;
     }
     if !cfg.execute {

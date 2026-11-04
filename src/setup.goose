@@ -144,7 +144,7 @@ fn edit_owner_settings() -> bool {
         !setup_number("Allow isolated local programs (0=no, 1=yes)", permit, permit) || permit > 1 ||
         !setup_owner_list("Allowed device operations (enroll,runtime,apply,restore,verify,reboot; -=none)", operation_names, operations) ||
         !setup_owner_list("Protected users/devices (comma-separated; -=none)", client_names, clients) ||
-        !setup_owner_list("Services to preserve (enable_samba,enable_ftp,dms_enable,daapd_enable,enable_webdav; -=none)", service_names, services) ||
+        !setup_owner_list("Capabilities to preserve (ids from the device capability graph, comma separated; -=none)", service_names, services) ||
         !setup_number("Program slots (1..8)", policy.max_programs, policy.max_programs) ||
         !setup_number("Resolved program retention (days, 0=keep, 1..365)", policy.program_retention_days, policy.program_retention_days) ||
         !setup_number("Program wall time (milliseconds, 100..10000)", policy.program_timeout_ms, policy.program_timeout_ms) { return false; }

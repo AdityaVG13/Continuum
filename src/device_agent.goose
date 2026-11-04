@@ -50,19 +50,33 @@ fn device_skill(name: const u8[:]) -> DeviceToolResult {
     if out.len > 8192 { return device_tool_rejected("workflow_skill_over_bound"); }
     return DeviceToolResult { receipt: out, ok: true };
 }
-fn device_features(payload: const u8[:]) -> i64 {
+// The model selects capability ids the device itself reported. Core validates
+// the shape, uniqueness and owner protection; the adapter resolves each id to
+// its own primitive and refuses one it never advertised.
+fn device_selection(payload: const u8[:], disable: u8[..128]&) -> const u8[:] {
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
     let root, err = json::parse(payload, doc, decoded);
-    let names: const u8[:][..5] = ["enable_samba", "enable_ftp", "dms_enable", "daapd_enable", "enable_webdav"];
-    if !root || !no_unknown(root, names) { return -1; }
-    var mask: i64 = 0; var bit: i64 = 1;
-    for name in names {
-        let selected, valid = json::as_bool(json::member(root, name));
-        if !valid { return -1; }
-        if selected { mask += bit; }
-        bit *= 2;
+    let keys: const u8[:][..1] = ["disable"];
+    if !root || !no_unknown(root, keys) { return "select_at_least_one_supported_capability"; }
+    match root.val { Obj o => { if o.count != 1 { return "select_at_least_one_supported_capability"; } }, _ => { return "select_at_least_one_supported_capability"; }, }
+    let entries = json::member(root, "disable");
+    if !entries { return "select_at_least_one_supported_capability"; }
+    match entries.val { Arr a => { if a.count < 1 || a.count > 8 { return "select_at_least_one_supported_capability"; } }, _ => { return "select_at_least_one_supported_capability"; }, }
+    var node = entries.first;
+    var seen: const u8[:][..8] = [];
+    while node {
+        let id, valid = json::as_string(node);
+        if !valid || id.len == 0 || id.len > 32 { return "capability_id_invalid"; }
+        for old in seen { if old == id { return "capability_id_duplicate"; } }
+        let protected = owner_protects(id);
+        if protected.len > 0 { return protected; }
+        seen.push(id);
+        if disable.len > 0 { disable.append(","); }
+        disable.append(id);
+        node .= node.next;
     }
-    return mask;
+    if disable.len == 0 || disable.len > 128 { return "capability_id_invalid"; }
+    return "";
 }
 // A qdisc profile is a closed vocabulary, validated before any device I/O.
 // The native adapter rechecks every bound independently of this caller.
@@ -232,7 +246,7 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
         return DeviceToolResult { receipt: device_view(d, observed), ok: observed.authenticated };
     }
     if !d.setup_approved { return device_tool_rejected("standing_device_permission_required"); }
-    let permitted = owner_admit(operation, if operation == "apply" { device_features(payload) } else { 0 });
+    let permitted = owner_admit(operation);
     if permitted.len > 0 { return device_tool_rejected(permitted); }
     if operation == "enroll" {
         if d.phase != "selected" && d.phase != "enrolling" && d.phase != "enrolled" {
@@ -247,10 +261,10 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
     if !observed.authenticated || !device_identity(d, observed.receipt) {
         return device_tool_rejected(if observed.authenticated { d.reason } else { observed.reason });
     }
-    var features: i64 = 0;
+    var disable: u8[..128] = "";
     if operation == "apply" {
-        features = device_features(payload);
-        if features <= 0 { return device_tool_rejected("select_at_least_one_supported_service"); }
+        let selection = device_selection(payload, disable);
+        if selection.len > 0 { return device_tool_rejected(selection); }
         if d.phase != "enrolled" { return device_tool_rejected("reconcile_existing_baseline_before_apply"); }
         d.recovery_directory = str(directory, "/device/recovery-", time_ns());
         d.phase = "commissioning";
@@ -262,7 +276,7 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
     if !device_save(d) { return device_tool_rejected("device_intent_not_durable"); }
     var raw: u8[>..] = [];
     let attempted = true;
-    let ok = commission_request(d.connection, operation, d.recovery_directory, true, raw, true, features);
+    let ok = commission_request(d.connection, operation, d.recovery_directory, true, raw, true, disable);
     if !ok {
         d.reason = "device_operation_unresolved_inspect_before_retry";
         if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }

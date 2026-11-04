@@ -312,9 +312,15 @@ def main():
         private_home.mkdir(mode=0o700)
         env.update(CT_COMMISSION_DEVICE_ROOT=str(device), CT_COMMISSION_DEVICE_PORT=str(port),
                    CT_COMMISSION_DEVICE_COOKIE=token, COMMISSION_ACTION="apply",
+                   COMMISSION_DISABLE="samba,ftp,dlna,daap,webdav",
                    COMMISSION_DIR="", HOME=str(private_home))
         denied = subprocess.run([binary], env=env, text=True, capture_output=True, timeout=15)
         assert denied.returncode != 0 and read_device() == before, "apply requires standing execute permission"
+        unknown = subprocess.run([binary], env=dict(env, COMMISSION_DISABLE="telnet", COMMISSION_EXECUTE="1"),
+                                 text=True, capture_output=True, timeout=30)
+        assert unknown.returncode != 0 and "capability_unknown" in unknown.stdout, \
+            "the adapter must refuse a capability id it never advertised"
+        assert read_device() == before, "a refused capability selection cannot touch the device"
         env["COMMISSION_EXECUTE"] = "1"
         applied = subprocess.run([binary], env=env, text=True, capture_output=True, timeout=90)
         transcript.append({"action": "apply", "exit": applied.returncode,
@@ -568,9 +574,8 @@ def main():
                 env=integrated_env, capture_output=True, text=True, timeout=10)
             assert refused_reboot.returncode != 0 and "protected_connectivity_unverified" in refused_reboot.stdout, "even an approved operation must honor the owner's protected-user constraint"
             assert (proc / "sys/kernel/random/boot_id").read_text() == boot_before_setup
-            set_policy(dict(defaults, protected_services=["enable_ftp"]))
-            program_tool("apply", json.dumps(dict(enable_samba=False, enable_ftp=True,
-                dms_enable=False, daapd_enable=False, enable_webdav=False)), "protected_service_required")
+            set_policy(dict(defaults, protected_services=["ftp"]))
+            program_tool("apply", json.dumps({"disable": ["ftp"]}), "protected_service_required")
             assert read_device() == before_denial
             set_policy(defaults)
             transcript.append({"action": "owner_policy", "denied_reboot": refused_reboot.stdout,
@@ -651,7 +656,7 @@ def main():
             trial_id = "maintenance-trial"
             trial = dict(id=trial_id, purpose="Verify a reversible FTP-only change.", interval_ms=0,
                 steps=[dict(operation="restore", payload=""), dict(operation="apply", payload=json.dumps(
-                    dict(enable_samba=False, enable_ftp=True, dms_enable=False, daapd_enable=False, enable_webdav=False)))])
+                    {"disable": ["ftp"]}))])
             program_tool("install_program", trial, "installed")
             effected = subprocess.run([unified, "--program-run", trial_id], env=no_model,
                 capture_output=True, text=True, timeout=90)
@@ -671,8 +676,7 @@ def main():
             assert reconciled.returncode == 0 and json.loads(registry_path.read_text())["programs"][1]["status"] == "reconciled"
             transcript.append({"action": "program_effect_reconciliation", "run": json.loads(effected.stdout),
                 "blocked": blocked.stdout, "restored": restored_program.stdout, "reconciled": reconciled.stdout})
-            features = json.dumps(dict(enable_samba=True, enable_ftp=False, dms_enable=False,
-                                      daapd_enable=False, enable_webdav=False)).ljust(240)
+            features = json.dumps({"disable": ["samba"]}).ljust(240)
             for slot in range(1, 7):
                 program_tool("install_program", dict(id=f"reserved-{slot}", purpose="p" * 256,
                     interval_ms=0, steps=[dict(operation="apply", payload=features)] * 4), "installed")

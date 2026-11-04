@@ -87,7 +87,7 @@ int32_t ct_meta_submit(ct_handle, ct_bytes request, uint64_t *out) {
                 return call("manage_device", arguments.c_str());
             };
             if (turn == 0) output = manage("read_skill", "commissioning");
-            else if (turn == 1) output = manage("apply", "{\"enable_samba\":true,\"enable_ftp\":false,\"dms_enable\":false,\"daapd_enable\":false,\"enable_webdav\":false}");
+            else if (turn == 1) output = manage("apply", "{\"disable\":[\"samba\"]}");
             else if (turn == 2) {
                 if (body.find("baseline_applied") == std::string::npos)
                     return fail("model did not receive the actual apply receipt");

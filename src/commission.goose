@@ -27,7 +27,7 @@ fn commission_authenticated(text: const u8[:]) -> bool {
 
 
 fn commission_request(cfg: LeapConfig, action: const u8[:], directory: const u8[:], execute: bool,
-        result: u8[>..]&, quiet: bool = false, features: i64 = 31,
+        result: u8[>..]&, quiet: bool = false, disable: const u8[:] = "",
         owner_reboot_approved: bool = false) -> bool {
     if action != "inspect" && action != "apply" && action != "restore"
             && action != "authorize" && action != "runtime"
@@ -95,13 +95,9 @@ fn commission_request(cfg: LeapConfig, action: const u8[:], directory: const u8[
     req.append(",\"execute\":");
     json::format_bool(req, execute);
     req.append(",\"owner_reboot_approved\":"); json::format_bool(req, owner_reboot_approved);
-    // A finite backend capability, not a cleanup policy: the model selects the
-    // individual services. The operator-only legacy CLI explicitly selects all.
-    req.append(",\"enable_samba\":"); json::format_bool(req, features % 2 == 1);
-    req.append(",\"enable_ftp\":"); json::format_bool(req, features / 2 % 2 == 1);
-    req.append(",\"dms_enable\":"); json::format_bool(req, features / 4 % 2 == 1);
-    req.append(",\"daapd_enable\":"); json::format_bool(req, features / 8 % 2 == 1);
-    req.append(",\"enable_webdav\":"); json::format_bool(req, features / 16 % 2 == 1); req.append("}");
+    // The selection is capability ids the device itself reported, not keys the
+    // controller knows. The adapter resolves them and refuses unknown ids.
+    req.append(",\"disable\":"); json::format_string(req, disable); req.append("}");
     var receipt: u8[..16384] = [0; 16384];
     var n: i64 = 0;
     let rc = ct_asus_commission_json(req, receipt, n);
@@ -177,9 +173,9 @@ fn commission_qos(cfg: LeapConfig, directory: const u8[:], execute: bool, op: co
 }
 
 fn commission_run(cfg: LeapConfig, action: const u8[:], directory: const u8[:], execute: bool,
-        owner_reboot_approved: bool = false) -> bool {
+        owner_reboot_approved: bool = false, disable: const u8[:] = "") -> bool {
     var receipt: u8[>..] = [];
-    let ok = commission_request(cfg, action, directory, execute, receipt, false, 31, owner_reboot_approved);
+    let ok = commission_request(cfg, action, directory, execute, receipt, false, disable, owner_reboot_approved);
     if receipt.len > 0 { print(receipt); }
     return ok;
 }
