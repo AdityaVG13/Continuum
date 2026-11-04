@@ -1,28 +1,108 @@
 # Continuum
 
-A Meta-directed network controller. An agent does useful work through a
-network it shares with bulk traffic; a Meta controller sees both the task
-and the path, takes bounded reversible action through a deterministic
-guardian, checks whether it helped, and restores its owned configuration.
-Goose is the primary implementation language; C++ supplies the native
-transport boundaries and the fallback path.
+[![release](https://img.shields.io/github/v/release/AdityaVG13/Continuum?color=blue)](https://github.com/AdityaVG13/Continuum/releases)
+[![license](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
-The intended product is unattended after one-time setup: understand task needs
-and network conditions, diagnose problems, admit only authorized reversible
-changes, verify their effect and restore when they do not help. Its resident
-service must remain useful without busy waiting or unbounded retained work;
-only Meta models provide AI reasoning, and normal healthy monitoring spends
-no model calls. Router-side or an always-on LAN deployment is the target, not
-something the owner must repeatedly open and prompt.
+**A network control plane your agent can use — and cannot run away with.**
 
-Built for the Meta Global AI Developer Hackathon (indie track,
-Push-the-Frontier): the claim under test is whether a model that sees
-task needs *and* path evidence makes better bounded choices than
-competent conventional control - measured, not asserted.
+One binary on your Mac. It finds the router you physically own, enrolls a
+factory-fresh unit without asking for a password that does not exist, commissions
+it through the vendor's own interface, shapes its WAN queue with CAKE it can
+undo, and proves each step with a receipt. When a change is unsafe or the unit
+cannot support it, Continuum refuses with a typed reason instead of leaving a
+half-state behind.
 
-## Current status
+Healthy operation spends no model calls. Every write needs the permission you
+granted. Every uncertain effect is reconciled, never replayed.
 
-Working today:
+Built for the Meta Global AI Developer Hackathon (indie track, Push-the-Frontier).
+The claim under test: a model that sees the task *and* the path makes better
+bounded choices than a competent static rule — and the product can prove what it
+did without asking the owner to trust the model.
+
+Goose is the primary implementation language; C++ supplies the native transport
+boundaries and the fallback path. Reasoning comes from Meta's `muse-wonder-1.0`
+through the Responses API: every call is bounded by model, token and call caps,
+and healthy operation spends none.
+
+## The demo, in five keys
+
+```console
+$ continuum --tui
+ CONTINUUM - OVERVIEW            META NOT CONFIGURED
+ [1] Overview   [2] Network   [3] Device   [4] Programs   [5] Resident
+ WATCHING no observation yet - [d] Discover | SELECTED en0:192.168.50.1
+ PERMISSION enroll,runtime,apply,restore,verify | RESIDENT not running
+```
+
+| key | what happens |
+| --- | --- |
+| `d` | reads this host's interfaces, routes and neighbor candidates. No key, no scan. |
+| `p` | binds the router you say you own. Selection grants no write permission. |
+| `n` | enrolls a factory-pending unit: mints the admin credential, stages it in the OS keychain, submits the vendor's first-run form, proves a protected read. |
+| `f` | sets the operations and constraints the model may ever use. Meta can read this policy, never widen it. |
+| `e` | hands the commissioned device to Meta for bounded, reversible setup — with every effect receipted and a way back. |
+
+The enrollment line is the one people do not believe. A factory-reset GT-AX has
+**no admin password to type**, so Continuum generates one, stores it before the
+first write, and then proves the device accepts it: the factory default
+`admin/admin` is dead afterwards, a retry inspects instead of replaying the
+ceremony, and no credential material reaches the transcript or the durable state
+file. Vendor wizards do not do this; that is the point.
+
+## Three guarantees that make it safe to point at hardware
+
+1. **The model never holds the shell.** Meta chooses from a typed tool surface
+   (`manage_device`, `apply_qos`, ...). It never receives router credentials,
+   never composes a shell command, and never widens the policy you set.
+2. **Every effect is a transaction.** Before-image captured, change applied,
+   independent readback, rollback on drift. A model's claim of success is not
+   evidence; the readback is.
+3. **Refusal is a first-class result.** No `tc` on the unit, a vendor-managed
+   root qdisc, an out-of-bounds profile, a rate the device did not honor — each
+   comes back as a typed refusal, not a half-applied network.
+
+## Prove it yourself
+
+```console
+$ make check-all
+CHECK_ALL_GREEN
+```
+
+Nine contract suites, a 6,060-case tool-JSON fuzz lane, the full device
+lifecycle against a loopback ASUS double, live measurement, and the signing
+policy. No provider key, no hardware, no remote worker: about two minutes of
+wall time and under half a minute of CPU.
+
+The lane that matters for the demo is the enrollment gate. It drives a
+factory-pending unit end to end and fails on any of: a bare `enroll` that is not
+refused, a surviving factory default, a surviving pre-existing password, a
+replayed first-run form on retry, a credential in output or durable state. Flip
+the execute gate in `src/device.goose` and that test goes red: it fails for the
+reason it exists, not because it was written to pass.
+
+## What works today
+
+- **Enrollment that creates its own credential** — no password to type, staged
+  before the first write, proven by a protected read.
+- **Commissioning you can undo** — private backup, bounded process inventory,
+  allowlisted sharing changes, device-local rollback, exact-prior-flags restore.
+  The GT-AX11000 has carried these settings across a real reboot.
+- **Traffic control with a preflight** — read-only `qos-status` decides whether
+  the unit can host a qdisc at all; `--device-qos` applies a bounded CAKE profile
+  and independently reads back the requested rate; `--device-qos-restore` puts
+  the original back.
+- **Evidence or refusal** — `--measure` samples idle and loaded RTT and goodput,
+  refuses to certify a run it did not sample, and only counts an upload the far
+  end actually accepted.
+- **A governor, not a wrapper** — typed tool surface, owner policy in front of
+  every effect, separate owner approval for a reboot, and no credential or shell
+  ever handed to the model.
+- **A resident that stays quiet** — healthy monitoring spends zero model calls;
+  setup, dialogue and incidents share one selected-device dispatcher.
+
+<details>
+<summary>Every implemented surface, in detail</summary>
 
 - Interactive Goose/C++ TUI for masked Meta key entry, optional macOS Keychain
   storage, model/budget settings, host discovery and bounded Meta investigation
@@ -70,18 +150,29 @@ Working today:
   operations. Its output is an intent submitted through the same permission
   boundary; isolated code never receives router credentials or direct control.
 
-Not yet verified: a keyed controller/workload run (needs `MODEL_API_KEY`).
-Live optimization telemetry, general controller crash recovery, arbitrary
-router-resident program deployment and the comparison against a rule remain
-unimplemented. Local authored programs are implemented; live Meta authoring is
-not yet qualified. The ASUS commissioning rollback is not a general controller
-watchdog. Setup discovery reads live host interfaces/routes; optimization
-observations are still synthetic, and supervised HTTP targets are restricted
-to loopback until live collection and crash recovery exist. `docs/STATUS.md`
-records the boundaries; the deterministic six-tool test is not a Meta run.
+</details>
 
-Every claim in this repository is scoped to the evidence behind it -
-see "Claim discipline" below.
+## Where the line is
+
+Two things are deliberately not dressed up:
+
+- **The CAKE/qdisc path has not run on hardware yet.** It is proven end to end
+  against the ASUS double, including an absent `tc`, a vendor-managed root, an
+  out-of-bounds profile, rate clamping and a verified restore. The physical run
+  is the next item on the bench, and `docs/STATUS.md` will record it when it
+  lands.
+- **Optimization observations are still synthetic** in the supervised control
+  loop. Live telemetry is what turns "better than a static rule" into a measured
+  claim, so no latency or goodput number is quoted anywhere in this repository
+  until that run exists.
+
+The ASUS onboarding ceremony has already completed on a physical GT-AX11000 in
+both firmware branches with outcome `Verified`; what remains is the same
+ceremony driven through the shipped CLI path rather than the lab script.
+
+Everything else — the full ledger, including what is still closed — is one row
+per capability in [`docs/STATUS.md`](docs/STATUS.md), each with the evidence
+that backs it.
 
 ## Quickstart
 
@@ -107,9 +198,10 @@ whether the resident is running. Job results render on their own Result screen.
 `j/k`/arrow keys scroll, `J/K` and `PgUp/PgDn` page; `q` cancels a running job
 and quits. While busy, only `q` works and the footer says so.
 
-First run advances in three steps: discover this host's network, select the
-device you own, then set permissions and start the resident monitor. No Meta
-key is needed to discover, select, or set permissions.
+First run advances in four steps: discover this host's network, select the
+device you own, enroll a factory-pending unit (the program creates the admin
+credential), then set permissions and start the resident monitor. No Meta key is
+needed for any of them.
 
 - **m**: enter `MODEL_API_KEY` privately, with masked input. Keep it for the
   session or explicitly save it in macOS Keychain; it never enters the model
@@ -132,6 +224,11 @@ key is needed to discover, select, or set permissions.
 - **o** (Device screen) / **i** (Device): show saved lifecycle gates ([OK]/[ ] checklist) / perform a protected inspection.
   **u** separately authorizes access to an existing protected credential; ordinary
   inspection and resident monitoring refuse unavailable access without an OS dialog.
+- **n** (Device): enroll a factory-pending unit. Generates the admin credential
+  and PSK, stages them in the OS vault before the first write, submits the
+  vendor's first-run form and verifies a protected read under the new
+  credential. Refused without explicit execute; a retry inspects instead of
+  replaying the ceremony.
 - **e** (Device): grant standing permission for Meta-directed setup and supported
   reversible operations on the selected device, within your owner policy. Use
   **f** to choose allowed operations and constraints; Meta cannot change that
