@@ -112,7 +112,7 @@ fn device_qos(d: DeviceState&, directory: const u8[:], operation: const u8[:], p
     // A read needs a durable receipt directory, not a mutation; apply/restore
     // need the owned baseline that directory stands for.
     if d.recovery_directory.len == 0 && !is_status { return device_tool_rejected("owned_baseline_required"); }
-    if d.phase != "enrolled" && d.phase != "baseline_applied" {
+    if d.phase != "enrolled" && d.phase != "baseline_applied" && d.phase != "network_qualification_required" {
         return device_tool_rejected("owned_baseline_required");
     }
     if d.recovery_directory.len == 0 {
@@ -148,6 +148,14 @@ fn device_qos(d: DeviceState&, directory: const u8[:], operation: const u8[:], p
     let verified, v = json::as_bool(json::member(receipt, "qos_verified"));
     if !verified || !v {
         return DeviceToolResult { receipt: discovery_rejected("qos_readback_unverified"), mutation_attempted: attempted };
+    }
+    // A read changes nothing; an apply or restore replaces the qdisc the last
+    // measurement described, so a qualification earned against the old shape is
+    // no longer about this baseline and must be re-earned.
+    if !is_status {
+        d.network_load_verified = false;
+        d.baseline_at = time_ns();
+        d.reason = "qdisc_changed_measurement_required";
     }
     if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }
     if raw.len > 8192 { return DeviceToolResult { receipt: discovery_rejected("device_receipt_over_bound"), mutation_attempted: attempted }; }
@@ -300,10 +308,13 @@ fn device_execute(directory: const u8[:], d: DeviceState&, operation: const u8[:
             return DeviceToolResult { receipt: discovery_rejected("runtime_or_recovery_unverified"), mutation_attempted: attempted };
         }
         d.runtime_verified = true; d.recovery_verified = true; d.persistence_verified = false; d.phase = "baseline_applied";
+        d.network_load_verified = false; d.baseline_at = time_ns();
     } else if operation == "restore" {
         d.phase = "enrolled"; d.runtime_verified = false; d.recovery_verified = false; d.persistence_verified = false;
+        d.network_load_verified = false; d.baseline_at = 0;
     } else if operation == "verify" && pe && persistence {
         d.persistence_verified = true; d.phase = "network_qualification_required";
+        d.network_load_verified = false; d.baseline_at = time_ns();
     }
     d.reason = "routed_load_and_general_crash_recovery_unqualified";
     if !device_save(d) { return DeviceToolResult { receipt: discovery_rejected("device_result_not_durable"), mutation_attempted: attempted }; }

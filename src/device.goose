@@ -26,6 +26,8 @@ struct DeviceState {
     runtime_verified: bool = false,
     recovery_verified: bool = false,
     persistence_verified: bool = false,
+    network_load_verified: bool = false,
+    baseline_at: i64 = 0,
     recovery_directory: u8[..512] = "",
     knowledge: u8[..2048] = "",
     last_exchange: u8[..3072] = "",
@@ -39,7 +41,7 @@ struct DeviceObservation {
 
 fn device_record(d: DeviceState) -> u8[>..] {
     var out: u8[>..] = [];
-    out.append("{\"schema_version\":2,\"candidate_id\":"); json::format_string(out, d.candidate_id);
+    out.append("{\"schema_version\":3,\"candidate_id\":"); json::format_string(out, d.candidate_id);
     out.append(",\"connection\":{\"host\":"); json::format_string(out, d.connection.host);
     out.append(",\"port\":"); json::format_int(out, d.connection.port);
     out.append(",\"interface_id\":"); json::format_string(out, d.connection.interface_id);
@@ -57,9 +59,14 @@ fn device_record(d: DeviceState) -> u8[>..] {
     out.append(",\"runtime_verified\":"); json::format_bool(out, d.runtime_verified);
     out.append(",\"recovery_verified\":"); json::format_bool(out, d.recovery_verified);
     out.append(",\"persistence_verified\":"); json::format_bool(out, d.persistence_verified);
-    // No routed-load qualifier exists yet. Neither file edits, inventory nor
-    // baseline persistence may silently open the autonomous actuation gate.
-    out.append(",\"network_load_verified\":false,\"ready\":false,\"recovery_directory\":");
+    out.append(",\"network_load_verified\":"); json::format_bool(out, d.network_load_verified);
+    // Ready is derived, never an independent claim: every gate plus a measured
+    // loaded run must hold at once, and a record whose ready bit disagrees with
+    // its gates fails to load instead of granting reach.
+    out.append(",\"ready\":"); json::format_bool(out, d.setup_approved && d.runtime_verified &&
+        d.recovery_verified && d.persistence_verified && d.network_load_verified);
+    out.append(",\"baseline_at\":"); json::format_int(out, d.baseline_at);
+    out.append(",\"recovery_directory\":");
     json::format_string(out, d.recovery_directory);
     out.append(",\"knowledge\":"); json::format_string(out, d.knowledge);
     out.append(",\"last_exchange\":"); json::format_string(out, d.last_exchange);
@@ -73,9 +80,9 @@ fn device_load(d: DeviceState&) -> bool {
     if n == 0 { d = DeviceState {}; return true; }
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
     let root, err = json::parse(buffer[..n], doc, decoded);
-    let known: const u8[:][..16] = ["schema_version", "candidate_id", "connection", "identity", "phase",
+    let known: const u8[:][..17] = ["schema_version", "candidate_id", "connection", "identity", "phase",
         "ownership", "setup_approved", "runtime_verified", "recovery_verified", "persistence_verified",
-        "network_load_verified", "ready", "recovery_directory", "reason", "knowledge", "last_exchange"];
+        "network_load_verified", "ready", "baseline_at", "recovery_directory", "reason", "knowledge", "last_exchange"];
     let conn = json::member(root, "connection"); let identity = json::member(root, "identity");
     let connection_keys: const u8[:][..8] = ["host", "port", "interface_id", "ssid_stem", "admin_user", "admin_ref", "psk_ref", "control_rides_wifi"];
     let identity_keys: const u8[:][..3] = ["productid", "mac", "firmware"];
@@ -113,10 +120,32 @@ fn device_load(d: DeviceState&) -> bool {
     let persistence, pe = json::as_bool(json::member(root, "persistence_verified"));
     let load, lo = json::as_bool(json::member(root, "network_load_verified"));
     let ready, rd = json::as_bool(json::member(root, "ready"));
+    // A qualification is only meaningful relative to the baseline it measured;
+    // v3 records carry that instant, older records cannot claim one.
+    var baseline_ns: i64 = 0;
+    if json::member(root, "baseline_at") {
+        let value, value_ok = json::as_i64(json::member(root, "baseline_at"));
+        if !value_ok { return false; }
+        if value < 0 { return false; }
+        baseline_ns = value;
+    } else if version != 1 && version != 2 { return false; }
     let directory, di = json::as_string(json::member(root, "recovery_directory"));
     let reason, rs = json::as_string(json::member(root, "reason"));
-    if !v || (version != 1 && version != 2) || !c || !h || !p || !i || !s || !u || !a || !k || !w || !pr || !ma || !fi ||
-            !ph || !ap || !rt || !re || !pe || !lo || !rd || !di || !rs || load || ready ||
+    // A record may not claim readiness its gates do not support: v3 derives it,
+    // and a v1/v2 record may never carry either bit.
+    var derived_ready = false;
+    if approved {
+        if runtime {
+            if recovery {
+                if persistence {
+                    if load { derived_ready = true; }
+                }
+            }
+        }
+    }
+    if version >= 3 && ready != derived_ready { return false; }
+    if !v || (version != 1 && version != 2 && version != 3) || !c || !h || !p || !i || !s || !u || !a || !k || !w || !pr || !ma || !fi ||
+            !ph || !ap || !rt || !re || !pe || !lo || !rd || !di || !rs || (version != 3 && (load || ready)) ||
             !valid_id(candidate, 64) || !valid_id(host, 64) || router_prefix(host).len == 0 ||
             !valid_id(iface, 64) || candidate != str(iface, ":", host) || !valid_id(stem, 27) ||
             !valid_id(user, 32) || !valid_id(admin, 128) || !valid_id(psk, 128) || port < 1 || port > 65535 ||
@@ -127,7 +156,8 @@ fn device_load(d: DeviceState&) -> bool {
             phase != "baseline_applied" && phase != "reboot_pending" && phase != "network_qualification_required" { return false; }
     d = DeviceState { candidate_id: candidate, phase: phase, ownership: ownership, productid: product, mac: mac, firmware: firmware,
         setup_approved: approved, runtime_verified: runtime, recovery_verified: recovery,
-        persistence_verified: persistence, recovery_directory: directory, reason: reason };
+        persistence_verified: persistence, network_load_verified: load, baseline_at: baseline_ns,
+        recovery_directory: directory, reason: reason };
     d.connection = LeapConfig { host: host, port: port, interface_id: iface, ssid_stem: stem,
         admin_user: user, admin_ref: admin, psk_ref: psk, control_rides_wifi: wifi, rejoin: wifi };
     // Existing bindings acquire empty context, never new authority.
@@ -187,7 +217,13 @@ fn device_select(directory: const u8[:], observed: const u8[:], candidate: const
         stem: const u8[:], port: i64, existing_credentials: bool = false) -> bool {
     if !valid_id(candidate, 64) || !valid_id(stem, 27) || port < 1 || port > 65535 || !device_open(directory, 1) { return false; }
     var old = DeviceState {};
-    if !device_load(old) || (old.candidate_id.len > 0 && old.phase != "selected") { ct_device_close(); return false; }
+    // Re-selecting the same candidate is the owner's recovery action after a
+    // factory reset: the saved binding is stale (its minted admin is gone) and
+    // the only way back to the ceremony is to discard it. A different candidate
+    // still cannot clobber a live binding; selection requires an unbound record.
+    if !device_load(old) || (old.candidate_id.len > 0 && old.phase != "selected" && old.candidate_id != candidate) {
+        ct_device_close(); return false;
+    }
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];
     let root, err = json::parse(observed, doc, decoded);
     let candidates = json::member(root, "candidates");
@@ -298,6 +334,7 @@ fn device_enroll(directory: const u8[:], d: DeviceState&, execute: bool) -> bool
             d.reason = if observed.authenticated { d.reason } else { observed.reason }; return false;
         }
         d.phase = "enrolled";
+        d.network_load_verified = false; d.baseline_at = 0;
         if !device_save(d) { return false; }
     }
     // Enrollment is a capability. The model chooses commissioning work and
@@ -336,6 +373,57 @@ fn device_qos_step(directory: const u8[:], payload: const u8[:], restore: bool) 
     ct_device_close();
     if result.receipt.len > 0 { print(result.receipt); }
     if !result.ok { return 1; }
+    return 0;
+}
+
+// Qualification is the last gate and the only one a measurement may open. The
+// evidence is produced by --measure, which already refuses an unsampled or
+// failed run; this step re-checks the file, the sample floor and the ordering,
+// so an old artifact or a model conclusion cannot manufacture readiness.
+fn device_qualify(directory: const u8[:], evidence: const u8[:], execute: bool) -> i64 {
+    if !device_open(directory, 1) { print("DEVICE_REFUSED binding busy or private storage unavailable"); return 1; }
+    var d = DeviceState {};
+    if !device_load(d) || d.candidate_id.len == 0 {
+        ct_device_close(); print("DEVICE_REFUSED select an observed device first; invalid state is not replaced"); return 1;
+    }
+    var ok = false;
+    if !execute {
+        d.reason = "explicit_execute_permission_required";
+    } else if d.phase != "network_qualification_required" || !d.runtime_verified || !d.recovery_verified || !d.persistence_verified {
+        d.reason = "runtime_recovery_and_persistence_verification_required";
+    } else if evidence.len == 0 || evidence.len > 1024 {
+        d.reason = "measurement_evidence_required";
+    } else {
+        var raw: u8[>..] = [];
+        if !read_file(evidence, raw) || raw.len == 0 || raw.len > 65536 {
+            d.reason = "measurement_evidence_unreadable";
+        } else {
+            var doc: json::Node[>..] = [];
+            var decoded: u8[>..] = [];
+            let root, err = json::parse(raw, doc, decoded);
+            let verdict, has_verdict = json::as_string(json::member(root, "verdict"));
+            let measured, has_measured = json::as_i64(json::member(root, "measured_at"));
+            let body = json::member(root, "evidence");
+            let idle, idle_ok = json::as_i64(json::member(body, "idle_samples"));
+            let loaded, loaded_ok = json::as_i64(json::member(body, "loaded_samples"));
+            let bytes, bytes_ok = json::as_i64(json::member(body, "load_bytes"));
+            if !root || !has_verdict || !has_measured || verdict != "claimable" {
+                d.reason = "measurement_not_claimable";
+            } else if !idle_ok || !loaded_ok || !bytes_ok || idle < MEASURE_MIN_SAMPLES ||
+                    loaded < MEASURE_MIN_SAMPLES || bytes <= 0 {
+                d.reason = "measurement_below_sample_floor";
+            } else if measured <= d.baseline_at {
+                d.reason = "evidence_predates_baseline";
+            } else {
+                d.network_load_verified = true;
+                d.reason = "routed_load_measured_ready";
+                ok = true;
+            }
+        }
+    }
+    if !device_save(d) { ok = false; }
+    print(device_record(d)); ct_device_close();
+    if !ok { return 1; }
     return 0;
 }
 
@@ -387,6 +475,7 @@ fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i6
             ok = commission_request(d.connection, "restore", d.recovery_directory, true, raw) && device_identity(d, raw);
             if ok {
                 d.phase = "enrolled"; d.runtime_verified = false; d.recovery_verified = false; d.persistence_verified = false;
+                d.network_load_verified = false; d.baseline_at = 0;
             }
         } else { d.reason = observed.reason; }
     } else { d.reason = "unsupported_action_or_explicit_execute_permission_missing"; }

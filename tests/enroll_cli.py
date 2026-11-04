@@ -132,6 +132,51 @@ def main():
             assert records(retry.stdout)[-1]["phase"] == "enrolled"
             assert status(port)["revision"] == live["revision"], \
                 "a retried enrollment must never replay the first-run form"
+
+            # A paperclip reset erases the credential the program minted. The
+            # saved binding then fails its protected read, and enrollment must
+            # rebuild the boundary on the now-factory unit instead of reporting
+            # the old phase as success.
+            reset_port = free_port()
+            reset = subprocess.Popen(
+                [double_binary, str(reset_port)],
+                env=dict(os.environ, ROUTER_PASSWORD=FIXTURE_PASSWORD, ROUTER_WIZARD="1"),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(60):
+                    try:
+                        if status(reset_port)["setup_done"] is False:
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.1)
+                else:
+                    raise SystemExit("ENROLL_CHECK_FAILED the reset double never answered")
+                state_path = home / "config/continuum/device/state.json"
+                saved = json.loads(state_path.read_text())
+                saved["connection"]["port"] = reset_port
+                state_path.write_text(json.dumps(saved))
+                # The owner's recovery action is an explicit re-selection of the
+                # same candidate: it discards the stale binding, and only then
+                # may the ceremony run again.
+                reselected = run(binary, env, "--device-select", "lo0:127.0.0.1", STEM, str(reset_port))
+                assert reselected.returncode == 0, reselected.stdout + reselected.stderr
+                fresh = records(reselected.stdout)[-1]
+                assert fresh["phase"] == "selected" and fresh["identity"]["productid"] == "", \
+                    "re-selection must discard the stale binding, not inherit its claims"
+                assert fresh["setup_approved"] is False, \
+                    "a discarded binding must not carry the old standing permission"
+                re_enrolled = run(binary, env, "--device-step", "enroll", "--execute")
+                assert re_enrolled.returncode == 0, re_enrolled.stdout + re_enrolled.stderr
+                assert records(re_enrolled.stdout)[-1]["phase"] == "enrolled"
+                rebuilt = status(reset_port)
+                assert rebuilt["setup_done"] is True, \
+                    "a reset unit must be re-enrolled, not left factory-pending"
+                assert login_token(reset_port, "admin", "admin") is False, \
+                    "the rebuilt boundary must not leave the factory default alive"
+            finally:
+                reset.terminate()
+                reset.wait(timeout=10)
             print("ENROLL_CHECK_GREEN", admin_ref)
         finally:
             double.terminate()

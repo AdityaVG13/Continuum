@@ -92,7 +92,8 @@ reason it exists, not because it was written to pass.
   the original back.
 - **Evidence or refusal.** `--measure` samples idle and loaded RTT and goodput,
   refuses to certify a run it did not sample, and only counts an upload the far
-  end actually accepted.
+  end actually accepted. `--device-qualify` opens `READY` only from a receipt
+  recorded after the last baseline change, and a qdisc change closes it again.
 - **A governor, not a wrapper.** Typed tool surface, owner policy in front of
   every effect, separate owner approval for a reboot, and no credential or shell
   ever handed to the model.
@@ -374,9 +375,16 @@ For headless device operation, `--device-select <candidate-id> <ssid-stem>`
 requires an exact candidate from current `--discover` output. `--device-status`
 reads saved gates; `--device-step inspect` refreshes protected evidence;
 `--device-step authorize` is the separate owner-interaction action.
+Re-selecting the same candidate is the recovery action after a factory reset:
+it discards the stale binding (identity, gates and standing permission) and
+returns the record to `selected`, so enrollment can run again. A different
+candidate still cannot clobber a live binding.
 `--device-step setup --execute` approves the initial transaction, including
-reboot, and returns exit 3 when that transaction reaches its still-unqualified
-network gate. `--device-step restore --execute` restores the owned baseline.
+reboot. `--device-step restore --execute` restores the owned baseline.
+The last gate is earned, not asserted: `--measure host:port/path /loadpath`
+records a claimable loaded run, and `--device-qualify <evidence> --execute`
+opens `READY` only when that receipt postdates the last lifecycle change. Any
+qdisc apply or restore closes it again, so the next change gets measured too.
 These are real device operations, not lab shortcuts; do not run them on an
 unapproved target. No device operation silently substitutes the default gateway.
 

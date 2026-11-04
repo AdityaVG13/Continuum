@@ -351,8 +351,11 @@ fn setup_device_view(out: u8[>..]&) {
         "\nRUNTIME      ", if d.runtime_verified { "[OK] verified" } else { "[ ] not verified" },
         "\nRECOVERY     ", if d.recovery_verified { "[OK] verified" } else { "[ ] not verified" },
         "\nPERSIST      ", if d.persistence_verified { "[OK] verified" } else { "[ ] not verified" },
-        "\nREADY        false (network-load tuning unqualified)\nReason       ", d.reason, "\n\n"));
-    out.append("[i] Protected inspection  [u] Authorize credential access\n[n] Enroll: create the admin credential on a factory unit\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nRouted-load tuning and general controller crash recovery remain unqualified.\n");
+        "\nLOAD         ", if d.network_load_verified { "[OK] measured" } else { "[ ] no claimable measurement" },
+        "\nREADY        ", if d.setup_approved && d.runtime_verified && d.recovery_verified &&
+            d.persistence_verified && d.network_load_verified { "true" } else { "false" },
+        "\nReason       ", d.reason, "\n\n"));
+    out.append("[i] Protected inspection  [u] Authorize credential access\n[n] Enroll: create the admin credential on a factory unit\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nREADY needs every gate plus a claimable --measure run recorded after the last lifecycle change; --device-qualify <evidence> --execute opens it. General controller crash recovery remains unqualified.\n");
 }
 fn confirm_device_job(job: const u8[:]) -> bool {
     var frame: u8[>..] = [];

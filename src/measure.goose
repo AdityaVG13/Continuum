@@ -99,8 +99,14 @@ fn measure_cli(directory: const u8[:], target: const u8[:], load_path: const u8[
     else if idle_failures > 0 || loaded_failures > 0 { verdict = "probe_failures"; }
     else if load_bytes <= 0 { verdict = "no_load_observed"; }
     var receipt: u8[..65536] = "";
-    receipt.append("{\"verdict\":\""); receipt.append(verdict); receipt.append("\",\"evidence\":");
-    receipt.append(buffer[..n]); receipt.append("}");
+    receipt.append("{\"verdict\":\""); receipt.append(verdict);
+    // The timestamp is part of the evidence, not the file name: a rename must
+    // not move a measurement in time, and a qualifier must be able to prove it
+    // ran after the baseline it claims to describe.
+    var stamp: u8[>..] = "";
+    json::format_int(stamp, time_ns());
+    receipt.append("\",\"measured_at\":"); receipt.append(stamp);
+    receipt.append(",\"evidence\":"); receipt.append(buffer[..n]); receipt.append("}");
     let path_text = str(directory, "/device/measure-", time_ns(), ".json");
     let durable = ct_checkpoint_write(path_text, receipt) == 0;
     print(receipt);

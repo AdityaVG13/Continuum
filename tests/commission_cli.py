@@ -574,6 +574,33 @@ def main():
             assert not pending["network_load_verified"] and not pending["ready"], "a model conclusion cannot manufacture qualification"
             assert pending["knowledge"] == "Owner uses FTP; keep it enabled."
 
+            # The last gate has a producer and a proof obligation: only a
+            # claimable measurement recorded after the last lifecycle change may
+            # qualify the device, and the record must stay internally consistent.
+            qualified_state = dict(pending, schema_version=3, persistence_verified=True,
+                                   phase="network_qualification_required", baseline_at=10_000_000_000)
+            state_path.write_text(json.dumps(qualified_state))
+            stale_evidence = directory / "measure-stale.json"
+            stale_evidence.write_text(json.dumps({"verdict": "claimable", "measured_at": 9_999_999_999,
+                "evidence": {"idle_samples": 20, "loaded_samples": 20, "idle_failures": 0,
+                             "loaded_failures": 0, "load_bytes": 1 << 20}}))
+            stale = subprocess.run([unified, "--device-qualify", str(stale_evidence), "--execute"],
+                                   env=integrated_env, capture_output=True, text=True, timeout=15)
+            assert stale.returncode != 0 and "evidence_predates_baseline" in stale.stdout, (
+                "an older measurement cannot qualify a newer baseline: " + stale.stdout)
+            assert json.loads(state_path.read_text())["ready"] is False
+            fresh_evidence = directory / "measure-fresh.json"
+            fresh_evidence.write_text(json.dumps({"verdict": "claimable", "measured_at": 10_000_000_001,
+                "evidence": {"idle_samples": 20, "loaded_samples": 20, "idle_failures": 0,
+                             "loaded_failures": 0, "load_bytes": 1 << 20}}))
+            qualified = subprocess.run([unified, "--device-qualify", str(fresh_evidence), "--execute"],
+                                       env=integrated_env, capture_output=True, text=True, timeout=15)
+            assert qualified.returncode == 0, qualified.stdout + qualified.stderr
+            record = json.loads(state_path.read_text())
+            assert record["network_load_verified"] is True and record["ready"] is True, record
+            assert record["reason"] == "routed_load_measured_ready", record
+            state_path.write_text(json.dumps(pending))
+
             chat = subprocess.run([unified, "--talk", "Keep FTP enabled. What changed?"],
                                   env=dict(integrated_env, CONTINUUM_AGENT_FIXTURE="chat"),
                                   capture_output=True, text=True, timeout=15)
