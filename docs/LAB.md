@@ -69,7 +69,7 @@ How the Mac reaches the router does not matter:
 | --- | --- | --- |
 | Cable to a LAN port (any state) | `Routers this Mac can reach`, the router marked `>` | `Enter`, `Enter` |
 | On the router's existing Wi-Fi | same, `(Wi-Fi, default route)` | `Enter`, `Enter` |
-| Factory-reset router, Mac on no network | `No router is in reach` | `w`, setup network name from the label (ASUS: `ASUS_XX`), `Enter`, `o`; then `1`, `Enter` |
+| Factory-reset router, Mac on no network | `No router is in reach` | `w`, setup network name (ASUS: `ASUS_XX` plus a band suffix such as `_2G`, XX = last MAC digits on the label; check the Mac's Wi-Fi menu), `Enter`, `o`; then `1`, `Enter` |
 | Mac on another network, router only on its own Wi-Fi | the other router only | `w`, name, `Enter`, `o` (open) or `p` + password; then its number, `Enter` |
 | Several routers (cable + Wi-Fi) | numbered list, each labelled by what answers on it | its number, `Enter` |
 
