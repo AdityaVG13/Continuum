@@ -244,8 +244,17 @@ Fetch the pinned Goose v2026.3 compiler for your platform
 
 ```sh
 export GOOSE=/absolute/path/to/goose
-make check status sim daemon test native-check
+make check-all                              # full local gate
+make check status sim daemon test native-check   # the lanes, individually
 ```
+
+`make check-all` is the full local gate: typecheck, the contract suites, the
+device lifecycle against the loopback double, live measurement, and the signing
+policy, ending in `CHECK_ALL_GREEN`. It needs no provider key, no hardware and no
+remote worker; on an M-series laptop it takes about two minutes of wall time and
+under half a minute of CPU. The wall time is device time that must actually
+elapse (a trial lease that expires unaided, a post-apply settle window) and live
+sampling loops, not build or analysis cost.
 
 These targets typecheck, build the status ledger, exercise the deterministic
 sim/daemon and nine contract suites, and syntax-check the C++ sources.

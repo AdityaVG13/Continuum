@@ -12,6 +12,16 @@ all: help
 $(BUILD):
 	mkdir -p $(BUILD)
 
+.PHONY: check-all
+
+# One entry for the full local gate: every target a release must pass, in order.
+# Wall time is dominated by device-time drills that must actually elapse (a lease
+# that expires unaided, a post-apply settle window) and by live sampling loops;
+# the CPU cost is small.
+check-all:
+	$(MAKE) check test owner-check service-check setup-check continuity-check device-check measure-check signing-check
+	@printf '%s\n' 'CHECK_ALL_GREEN'
+
 check:
 	$(GOOSE) check src/main.goose
 
