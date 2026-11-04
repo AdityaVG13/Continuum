@@ -350,6 +350,12 @@ std::string g_password;                       // ROUTER_PASSWORD
 std::map<std::string, std::string> factory_nvram() {
     std::map<std::string, std::string> nv = {
         {"productid", "RT-TEST"}, {"x_Setting", "0"}, {"w_Setting", "0"},
+        // A factory unit always carries its hardware identity and firmware
+        // version; without them the product cannot compile an inventory at all,
+        // so a modeled unit that omits them models nothing usable.
+        {"lan_hwaddr", "02:00:00:00:00:01"}, {"firmver", "3.0.0.4"},
+        {"buildno", "test"}, {"extendno", "1"},
+        {"lan_ipaddr", "192.168.50.1"}, {"lan_netmask", "255.255.255.0"},
         {"sw_mode", "1"},         {"wlc_psta", "0"},  {"wlc_dpsta", "0"},
         {"smart_connect_x", "0"}, {"wan_unit", "0"},  {"wan_proto", "dhcp"},
         {"wan_dhcpenable_x", "1"}, {"wan_dnsenable_x", "1"},

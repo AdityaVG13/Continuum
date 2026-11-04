@@ -360,6 +360,19 @@ fn device_step(directory: const u8[:], action: const u8[:], execute: bool) -> i6
         } else { d.reason = observed.reason; }
     } else if action == "reboot" && execute {
         ok = device_request_reboot(d);
+    } else if action == "enroll" {
+        // Creating the admin credential is the authentication boundary. It takes
+        // the owner's explicit execute, never a standing grant or a model field,
+        // and it is the one deterministic step on a factory-pending unit: a
+        // reset router has no admin password to type, so the program mints one,
+        // stores it in the credential vault and proves it by login.
+        if !execute {
+            d.reason = "explicit_execute_permission_required";
+        } else {
+            let refused = owner_admit("enroll", 0, true);
+            if refused.len > 0 { d.reason = refused; }
+            else { ok = device_enroll(directory, d, true); }
+        }
     } else if action == "qos-status" {
         // Read-only preflight for the optimization effect: proves the qdisc
         // tool is present and reports the current root before any window.

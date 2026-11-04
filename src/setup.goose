@@ -352,7 +352,7 @@ fn setup_device_view(out: u8[>..]&) {
         "\nRECOVERY     ", if d.recovery_verified { "[OK] verified" } else { "[ ] not verified" },
         "\nPERSIST      ", if d.persistence_verified { "[OK] verified" } else { "[ ] not verified" },
         "\nREADY        false (network-load tuning unqualified)\nReason       ", d.reason, "\n\n"));
-    out.append("[i] Protected inspection  [u] Authorize credential access\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nRouted-load tuning and general controller crash recovery remain unqualified.\n");
+    out.append("[i] Protected inspection  [u] Authorize credential access\n[n] Enroll: create the admin credential on a factory unit\n[e] Meta setup / resume  [r] Restore owned baseline\n[t] Talk to Meta  [b] Approve one router reboot\n\nService restarts are allowed within standing device permission.\nRouter reboot, reset and firmware changes are never implied.\nRouted-load tuning and general controller crash recovery remain unqualified.\n");
 }
 fn confirm_device_job(job: const u8[:]) -> bool {
     var frame: u8[>..] = [];
@@ -361,7 +361,9 @@ fn confirm_device_job(job: const u8[:]) -> bool {
     if !device_saved(setup_directory(), d) || d.candidate_id.len == 0 { return false; }
     frame.append(str("Selected  ", d.candidate_id, ":", d.connection.port, "\nPhase     ", d.phase,
         "\nIdentity  ", d.productid, " / ", d.mac, "\n"));
-    if job == "device-setup" {
+    if job == "device-enroll" {
+        frame.append("\nCreate this unit's admin credential and Wi-Fi now?\nThis unit reported no usable setup state, so there is no admin password to\nenter: Continuum generates one, stores it in the OS credential vault, submits\nthe factory setup form, and proves it by a fresh protected login.\nIt also renames Wi-Fi to the chosen stem and rotates the Wi-Fi passphrase.\nThis host may lose its link if it is associated to that radio.\nNO reboot, reset, firmware update or destructive action is approved.\n");
+    } else if job == "device-setup" {
         frame.append("\nGrant Meta standing permission for this selected device?\nMeta chooses setup and supported reversible optimization operations.\nNew factory enrollment may rotate credentials, rename Wi-Fi and disconnect\nthis host. Service restarts and verified optional-service changes are allowed.\nThis uses the configured model/call budget. Uncertain effects are reconciled.\nNO router/device reboot, reset, firmware update or destructive action is approved.\nCore routing/security settings are outside the current cleanup capability.\n");
     } else if job == "device-reboot" {
         frame.append("\nApprove ONE router/device reboot NOW for this selected device?\nThis interrupts the network and ongoing work. No schedule is created.\nStanding setup permission and Meta messages cannot approve this operation.\nA failed/uncertain request is verified, never automatically repeated.\n");
@@ -527,7 +529,7 @@ fn setup_help_body(frame: u8[>..]&) {
     frame.append("d / p     Discover host network / select the device you own\n");
     frame.append("m / c / v   Meta key (private) / models+budget / test connection (bounded, confirms first)\n");
     frame.append("f           Owner permissions: operations, protected users/services, local code, slots, retention\n");
-    frame.append("i/u/e/r/b   Inspect / authorize / Meta setup / restore / one reboot (device screen)\n");
+    frame.append("i/u/n/e/r/b  Inspect / authorize / enroll factory unit / Meta setup / restore / one reboot\n");
     frame.append("t / a / l   Talk to Meta / investigate paths / simulator lab (bounded calls, confirm first)\n");
     frame.append("s           Start resident monitor (grants no write/reboot permission)\n");
     frame.append("Enter/x/E/R  On Programs: read / disable / enable / reconcile by id\n");
@@ -686,12 +688,13 @@ fn run_setup_tui() -> bool {
                 if setup_program_action(operation, details) { notice.append("Program action completed; inspect the receipt."); }
                 else { notice.append("Program action refused or cancelled; registry unchanged unless receipt says otherwise."); }
                 screen = 3; scroll = 0; dirty = true;
-            } else if key == 'i' || key == 'u' || key == 'e' || key == 'r' || key == 'b' {
+            } else if key == 'i' || key == 'u' || key == 'n' || key == 'e' || key == 'r' || key == 'b' {
                 var selected = DeviceState {}; notice = [];
                 if !device_saved(setup_directory(), selected) || selected.candidate_id.len == 0 {
                     notice.append("Select a device first; no operation dispatched.");
                 } else {
                     job = []; job.append(if key == 'i' { "device-inspect" } else if key == 'u' { "device-authorize" }
+                        else if key == 'n' { "device-enroll" }
                         else if key == 'e' { "device-setup" } else if key == 'b' { "device-reboot" } else { "device-restore" });
                     if key == 'e' && !meta_credentials_available(cfg) { notice.append("Set MODEL_API_KEY with m first; no device or model dispatch."); }
                     else if key != 'i' && !confirm_device_job(job) { notice.append("Device operation cancelled; no dispatch."); }
@@ -739,7 +742,7 @@ fn run_setup_tui() -> bool {
                         screen = 6;
                         details = []; setup_device_view(details);
                         var selected = DeviceState {};
-                        if job == "device-setup" || result != 0 {
+                        if job == "device-setup" || job == "device-enroll" || result != 0 {
                             details.append("\nOPERATION RECEIPT\n"); details.append(output[..n]);
                         }
                     } else {

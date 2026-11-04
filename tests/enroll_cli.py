@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Factory-pending enrollment: the program creates the admin credential.
+
+A factory-reset router has no admin password to type. The owner's explicit
+enroll is the authentication boundary: the program generates the credential,
+stages it in the OS vault before any write, submits the vendor first-run form,
+proves a protected read under the staged credential, and never replays on a
+retry. Test-only values live in this process; no real router or Keychain is used.
+"""
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
+FIXTURE_PASSWORD = "FactoryFixture99"
+STEM = "LabStem"
+IDENTITY = {"productid": "RT-TEST", "mac": "02:00:00:00:00:01",
+            "firmware": "3.0.0.4/test/1"}
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def status(port):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/status",
+                                 headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=3) as response:
+        return json.load(response)
+
+
+def login_token(port, user, password):
+    """The firmware answers 200 with the login page and no token on refusal."""
+    import base64
+    body = urllib.parse.urlencode({
+        "login_authorization": base64.b64encode(f"{user}:{password}".encode()).decode()}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/login.cgi", data=body,
+                                 headers={"User-Agent": UA,
+                                          "Referer": f"http://127.0.0.1:{port}/Main_Login.asp"})
+    with urllib.request.urlopen(req, timeout=3) as response:
+        return "asus_token=" in (response.headers.get("Set-Cookie") or "")
+
+
+def records(stdout):
+    return [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+
+
+def run(binary, env, *args):
+    result = subprocess.run([binary, *args], env=env, text=True, capture_output=True, timeout=120)
+    return result
+
+
+def main():
+    binary = str(Path(sys.argv[1]).resolve())
+    double_binary = str(Path(sys.argv[2]).resolve())
+    port = free_port()
+    with tempfile.TemporaryDirectory(prefix="factory-enroll-") as scratch:
+        scratch = Path(scratch)
+        os.chmod(scratch, 0o700)
+        home = scratch / "home"
+        home.mkdir(mode=0o700)
+        double = subprocess.Popen(
+            [double_binary, str(port)],
+            env=dict(os.environ, ROUTER_PASSWORD=FIXTURE_PASSWORD, ROUTER_WIZARD="1"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(60):
+                try:
+                    before = status(port)
+                    break
+                except Exception:
+                    time.sleep(0.1)
+            else:
+                raise SystemExit("ENROLL_CHECK_FAILED the router double never answered")
+            assert before["setup_done"] is False, "the fixture must start factory-pending"
+            env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+                       CONTINUUM_DEVICE_FIXTURE="1")
+
+            selected = run(binary, env, "--device-select", "lo0:127.0.0.1", STEM, str(port))
+            assert selected.returncode == 0, selected.stdout + selected.stderr
+            state = records(selected.stdout)[-1]
+            assert state["phase"] == "selected" and state["identity"]["productid"] == "", \
+                "selection is not enrollment: nothing may be claimed about the unit yet"
+            admin_ref = state["connection"]["admin_ref"]
+            assert admin_ref and state["connection"]["admin_user"] == "admin"
+
+            # Enrollment creates an authentication boundary; a bare step is not consent.
+            refused = run(binary, env, "--device-step", "enroll")
+            assert refused.returncode == 1, refused.stdout + refused.stderr
+            refusal = records(refused.stdout)[-1]
+            assert refusal["reason"] == "explicit_execute_permission_required", refusal
+            assert status(port)["revision"] == before["revision"], \
+                "a refused enrollment must not write to the unit"
+
+            enrolled = run(binary, env, "--device-step", "enroll", "--execute")
+            assert enrolled.returncode == 0, enrolled.stdout + enrolled.stderr
+            after = records(enrolled.stdout)[-1]
+            assert after["phase"] == "enrolled", after
+            assert after["identity"] == IDENTITY, after["identity"]
+            assert after["setup_approved"] is True
+            assert after["ready"] is False and after["runtime_verified"] is False, \
+                "enrollment is not commissioning and not verified tuning"
+            assert FIXTURE_PASSWORD not in enrolled.stdout + enrolled.stderr, \
+                "no credential material may reach output"
+            live = status(port)
+            assert live["setup_done"] is True and live["ssid"].endswith("_2G"), live
+            assert live["revision"] > before["revision"], "the first-run form must land"
+
+            # The factory default is dead: the only working credential is the one
+            # the program generated, staged, and proved with a protected read.
+            assert login_token(port, "admin", "admin") is False, \
+                "the factory default must not survive enrollment"
+            assert login_token(port, "admin", FIXTURE_PASSWORD) is False, \
+                "the pre-existing fixture password must not survive enrollment"
+            durable = (home / "config/continuum/device/state.json").read_text()
+            assert FIXTURE_PASSWORD not in durable, \
+                "durable state must not carry credential material"
+            assert json.loads(durable) == after, \
+                "the durable record must be exactly the printed record, with no extra fields"
+
+            retry = run(binary, env, "--device-step", "enroll", "--execute")
+            assert retry.returncode == 0, retry.stdout + retry.stderr
+            assert records(retry.stdout)[-1]["phase"] == "enrolled"
+            assert status(port)["revision"] == live["revision"], \
+                "a retried enrollment must never replay the first-run form"
+            print("ENROLL_CHECK_GREEN", admin_ref)
+        finally:
+            double.terminate()
+            double.wait(timeout=10)
+
+
+if __name__ == "__main__":
+    main()

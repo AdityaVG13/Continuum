@@ -82,6 +82,7 @@ service-check: $(BUILD)/continuum $(BUILD)/continuum-service-test
 .PHONY: device-check measure-check
 device-check: $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
 	python3 tests/commission_cli.py $(BUILD)/continuum-leap-test $(BUILD)/router_double $(BUILD)/continuum-service-test
+	python3 tests/enroll_cli.py $(BUILD)/continuum-service-test $(BUILD)/router_double
 
 measure-check: $(BUILD)/continuum
 	python3 tests/measure_cli.py $(BUILD)/continuum

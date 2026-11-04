@@ -348,7 +348,8 @@ int32_t ct_tui_job_start(ct_bytes mode) {
         std::memchr(mode.data, 0, static_cast<size_t>(mode.len))) return CT_REJECTED;
     std::string task(reinterpret_cast<const char *>(mode.data), static_cast<size_t>(mode.len));
     const bool device = task == "device-inspect" || task == "device-authorize" ||
-                        task == "device-setup" || task == "device-restore" || task == "device-reboot";
+                        task == "device-enroll" || task == "device-setup" ||
+                        task == "device-restore" || task == "device-reboot";
     const bool talk = task.size() > 5 && task.compare(0, 5, "talk:") == 0;
     const char *arg = talk ? "--talk" : device ? "--device-step" : task == "discover" ? "--discover" : task == "agent" ? "--discover-model" :
                       task == "test-key" ? "--test-meta" : task == "lab" ? "--loop" : nullptr;
@@ -370,7 +371,8 @@ int32_t ct_tui_job_start(ct_bytes mode) {
         unsetenv("META_TASK_MODEL");
         if (device) {
             const char *step = task.c_str() + 7;
-            if (task == "device-setup" || task == "device-restore" || task == "device-reboot")
+            if (task == "device-setup" || task == "device-restore" || task == "device-reboot" ||
+                task == "device-enroll")
                 execl(path.c_str(), path.c_str(), arg, step, "--execute", static_cast<char *>(nullptr));
             else execl(path.c_str(), path.c_str(), arg, step, static_cast<char *>(nullptr));
         } else if (talk) execl(path.c_str(), path.c_str(), arg, task.c_str() + 5, static_cast<char *>(nullptr));

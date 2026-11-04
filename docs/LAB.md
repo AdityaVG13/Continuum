@@ -41,14 +41,19 @@ was proven vs. controlled.
 
 ## Physical lab run (owner-gated, not yet executed)
 
-Prerequisites: the GT-AX11000 is factory-reset, the Mac is on its LAN, and the
-admin password is available. The commissioning form enables `sshd` itself; do
-not toggle it by hand. The measurement target must be reachable **through the
-WAN** (a host on the Internet or another machine over the Internet), because a
+Prerequisites: the GT-AX11000 is factory-reset and the Mac is on its LAN. A
+factory unit has **no admin password to enter**: `n` (or
+`continuum --device-step enroll --execute`) generates one, stages it in the OS
+credential vault before any write, submits the vendor first-run form, and proves
+it with a protected read. Nothing about the credential is typed by the owner or
+passed through the model. The commissioning form enables `sshd` itself; do not
+toggle it by hand. The measurement target must be reachable **through the WAN**
+(a host on the Internet or another machine over the Internet), because a
 LAN-only target never crosses the qdisc under test.
 
-1. Commission: `continuum` opens the TUI; `m` enters the Meta key for the
-   session, `v` verifies it, `d` discovers, `p` selects, `f` grants
+1. Enroll, then commission: `continuum` opens the TUI; `m` enters the Meta key
+   for the session, `v` verifies it, `d` discovers, `p` selects the unit (choose
+   *new* credentials on a reset unit), `n` enrolls it, `f` grants
    `runtime`/`verify` first, `e` runs the commissioning dialogue. Commissioning
    must not reboot the unit.
 2. Preflight (read-only): `continuum --device-step qos-status`.
