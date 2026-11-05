@@ -3,6 +3,15 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.8] - 2026-11-04
+
+- **A router reset since the last run is caught at launch.** The wizard used to
+  resume at the saved step (the Meta key) for a router that had been
+  factory-reset, and only found out at Meta's step. Launch now makes one
+  read-only check with the saved admin password; if the router refuses it,
+  Continuum says the router was reset and starts over at step 2. Nothing is
+  written to the router.
+
 ## [0.2.7] - 2026-11-04
 
 - **Enrollment no longer gives up on the first refused login after the Wi-Fi

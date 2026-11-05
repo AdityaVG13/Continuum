@@ -872,6 +872,18 @@ fn setup_failure_reason(text: const u8[:]) -> u8[>..] {
     }
     return found;
 }
+// After a factory reset the saved binding is stale (its admin password is gone).
+// Re-select the router for enrollment, preferring the one supported router in
+// reach: it may now be reached over another link (cable instead of Wi-Fi).
+fn setup_rebind_reset(wd: DeviceState, network: u8[>..]&, labels: u8[>..]&) -> bool {
+    network = discover_host(); labels = setup_identify(network);
+    var stem: u8[..27] = "Continuum";
+    if wd.connection.ssid_stem.len > 0 { stem = wd.connection.ssid_stem; }
+    var pick: u8[>..] = [];
+    let marked = setup_marked(network, labels);
+    if marked.len > 0 { pick.append(marked); } else { pick.append(wd.candidate_id); }
+    return device_select(setup_directory(), network, pick, stem, wd.connection.port, false, true);
+}
 // The setup wizard is the bring-up path: one step at a time, each step stating
 // exactly what it will do. The step is derived from durable device state, so a
 // crash or restart resumes at the first unfinished step.
@@ -1365,6 +1377,17 @@ fn run_setup_tui() -> bool {
     // Step 3 reads the key's own model catalog, then the owner picks a model
     // and effort before the one billed connection test.
     var models: u8[>..] = []; var pick_pending = false;
+    // A saved router past enrollment may have been factory-reset since the
+    // last run; resuming at the key would only fail later, at Meta's step.
+    // One read-only protected read at launch decides it (wizard_job 15).
+    if wizard && startup_bound && startup_device.phase != "selected" && startup_device.phase != "enrolling" &&
+            startup_device.phase != "unselected" {
+        job = []; job.append("device-inspect");
+        if ct_setup_job_start(job) == 0 {
+            busy = true; wizard_job = 15;
+            notice.append("Checking that the router still accepts Continuum's password...");
+        }
+    }
     while true {
         if pick_pending && !busy {
             pick_pending = false; notice = [];
@@ -1462,15 +1485,8 @@ fn run_setup_tui() -> bool {
                 notice = [];
                 step_failed = false; show_raw = false; fail_reason = [];
                 if was_reset && enter && wstep != 1 && wstep != 2 {
-                    network = discover_host(); labels = setup_identify(network); observed_wall_ms = time_ns() / 1000000;
-                    var stem: u8[..27] = "Continuum";
-                    if wd.connection.ssid_stem.len > 0 { stem = wd.connection.ssid_stem; }
-                    // The router may now be reached over another link (cable
-                    // instead of Wi-Fi), so prefer the one supported router in reach.
-                    var pick: u8[>..] = [];
-                    let marked = setup_marked(network, labels);
-                    if marked.len > 0 { pick.append(marked); } else { pick.append(wd.candidate_id); }
-                    if device_select(setup_directory(), network, pick, stem, wd.connection.port, false, true) {
+                    observed_wall_ms = time_ns() / 1000000;
+                    if setup_rebind_reset(wd, network, labels) {
                         settled = false; tuned = false; qos_checked = false; evidence = [];
                         notice.append("Starting over at step 2 for the reset router. Nothing has been written to it yet.");
                     } else {
@@ -1871,6 +1887,23 @@ fn run_setup_tui() -> bool {
                             if !ok { watch_down = true; }
                             watch_next = now + 2000;
                             dirty = !ok || watch_down;
+                        }
+                    } else if finished == 15 {
+                        // Launch check: only a refused saved password changes course.
+                        step_failed = false;
+                        if !ok && setup_contains(text, "protected_authentication_refused") {
+                            var reset_from = DeviceState {};
+                            device_saved(setup_directory(), reset_from);
+                            observed_wall_ms = now;
+                            if reset_from.candidate_id.len > 0 && setup_rebind_reset(reset_from, network, labels) {
+                                settled = false; tuned = false; qos_checked = false; evidence = [];
+                                notice.append("This router no longer accepts Continuum's admin password: it was reset to\nfactory settings. Starting over at step 2; nothing has been written to it.");
+                            } else {
+                                step_failed = true;
+                                fail_reason.append("the router no longer accepts Continuum's admin password; it was probably reset to factory settings, and it is not in reach right now");
+                            }
+                        } else if !ok {
+                            notice.append("Could not reach the router to check it; continuing from the saved step.");
                         }
                     } else if finished == 6 {
                         if ok && after.persistence_verified {

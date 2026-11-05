@@ -889,6 +889,8 @@ def main():
                                "identity_mismatch": mismatched["device"], "boundary": "authored_device_os_and_model_transport"})
             drive_reach(unified, integrated_env, directory)
             print("WIZARD_REACH_GREEN", directory)
+            drive_reset(unified, double, integrated_env, directory)
+            print("WIZARD_RESET_GREEN", directory)
             drive_wizard(unified, integrated_env, directory, port, device, outage_file)
             print("WIZARD_LIFECYCLE_GREEN", directory)
             print("DEVICE_LIFECYCLE_ALL_GREEN", directory)
@@ -972,6 +974,93 @@ def drive_reach(unified, base_env, directory):
             process.wait(timeout=5)
         os.close(master)
         os.close(slave)
+
+
+def drive_reset(unified, double, base_env, directory):
+    """An enrolled router was factory-reset between runs -> launch goes to step 2.
+
+    Seen live: the saved binding said enrolled, so the wizard opened at the key
+    step for a router that had lost Continuum's admin password. Launch must
+    probe the router once, see the saved password refused, re-select it for
+    enrollment and show step 2, with nothing written to the router.
+    """
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    router = subprocess.Popen([double, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              env=dict(os.environ, ROUTER_PASSWORD="test-only-pw", ROUTER_WIZARD="1"))
+    home = directory / "reset"
+    config = home / "config/continuum"
+    config.mkdir(parents=True, mode=0o700)
+    joined = directory / "reset-joined.json"
+    joined.write_text("{}")
+    env = dict(base_env, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color",
+               NO_COLOR="1", CONTINUUM_DEVICE_FIXTURE="wifi", CT_TEST_WIFI_JOINED=str(joined))
+    env.pop("MODEL_API_KEY", None)
+    master = slave = process = None
+    try:
+        chosen = subprocess.run([unified, "--device-select", "lo0:127.0.0.1", "ContinuumFresh", str(port),
+                                 "--existing-credentials"], env=env, capture_output=True, text=True, timeout=10)
+        assert chosen.returncode == 0, chosen.stdout + chosen.stderr
+        enrolled = json.loads(chosen.stdout.splitlines()[-1])
+        enrolled.update(phase="enrolled", setup_approved=True,
+                        identity=dict(productid="RT-TEST", mac="02:00:00:00:00:01", firmware="1/2/3"))
+        (config / "device/state.json").write_text(json.dumps(enrolled))
+        # The password minted before the reset; the factory unit no longer takes it.
+        for ref in (enrolled["connection"]["admin_ref"], enrolled["connection"]["psk_ref"]):
+            env["CONTINUUM_SECRET_" + "".join(c.upper() if c.isalnum() else "_" for c in ref)] = "PreResetSecret123"
+        def revision():
+            req = urllib.request.Request("http://127.0.0.1:%d/api/status" % port, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=3) as response:
+                return json.load(response)["revision"]
+
+        for _ in range(50):
+            try:
+                before = revision()
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise AssertionError("the factory router double never answered")
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+        process = subprocess.Popen([unified], stdin=slave, stdout=slave, stderr=slave, env=env)
+        output = bytearray()
+
+        def expect(text, timeout=20):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if text.encode() in output:
+                    return
+                if select.select([master], [], [], 0.1)[0]:
+                    chunk = os.read(master, 65536)
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+            raise AssertionError("reset did not show " + repr(text) + "\n" + output[-2500:].decode(errors="replace"))
+
+        expect("no longer accepts Continuum's admin password")
+        expect("STEP 2 OF 8")
+        rebound = json.loads((config / "device/state.json").read_text())
+        assert rebound["phase"] == "selected" and rebound["setup_approved"] is False, rebound
+        assert rebound["connection"]["admin_ref"] != enrolled["connection"]["admin_ref"], \
+            "re-enrollment must mint into a fresh slot, not reuse the dead password"
+        assert revision() == before, "the launch check must not write to the router"
+    finally:
+        if process and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for fd in (master, slave):
+            if fd is not None:
+                os.close(fd)
+        router.kill()
+        router.wait(timeout=5)
 
 
 def drive_wizard(unified, base_env, directory, port, device, outage_file):
