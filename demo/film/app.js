@@ -17,24 +17,26 @@
   const params = new URLSearchParams(location.search);
 
   const CUES = [
-    { t: 6.0,   line: "Every house has a computer nobody logs into.\nThe router." },
-    { t: 14.0,  line: "Setting one up still means a sticker,\na browser tab, and a password you'll forget." },
-    { t: 23.0,  line: "When it misbehaves, you reboot it and hope." },
-    { t: 30.0,  line: "Continuum takes the whole thing over.\nOne command." },
-    { t: 44.0,  line: "It doesn't care how you're connected.\nA cable. Your Wi-Fi. Or nothing at all." },
-    { t: 53.0,  line: "I factory-reset this ASUS. The Mac has no network.\nContinuum says so, and asks for the setup network on the label." },
-    { t: 64.0,  line: "It joins, finds the router,\nand names what's answering. Nothing is written yet." },
-    { t: 74.0,  line: "A factory router has no password.\nContinuum mints one, locks it in the Keychain first,\nthen proves the router took it." },
-    { t: 87.0,  line: "Already configured? Type its password once.\nVerified. Nothing written." },
-    { t: 95.0,  line: "Then Meta. Continuum reads the models your key can use,\nwith Meta's own prices, and a ceiling on what one step can cost." },
-    { t: 107.0, line: "Muse Spark 1.3. One test call proves the key." },
-    { t: 115.0, line: "Spark gets named tools, not a shell.\nIt turns off the vendor services nothing here uses,\nand the router's own receipt decides if it counts." },
-    { t: 128.0, line: "One reboot, approved by me.\nContinuum waits for the router to go dark and come back,\nthen proves the settings survived." },
-    { t: 143.0, line: "Shaping is next: one CAKE queue on the WAN.\nThis firmware has no CAKE.\nContinuum says exactly that, and writes nothing." },
-    { t: 153.0, line: "So there's no queue to measure yet,\nand no number to quote." },
-    { t: 163.0, line: "Enrolled, cleaned up, rebooted and proven,\non a real router, by the router's own receipts." },
-    { t: 171.0, line: "No numbers I didn't measure." },
-    { t: 175.0, line: "A Meta agent that runs a real router,\nand can't run away with it." },
+    { t: 6.0,   line: "Most routers get set up once,\nand then nobody logs into them again." },
+    { t: 14.0,  line: "Setup means the password on the sticker,\na page in the browser, and a lot of settings you skip." },
+    { t: 23.0,  line: "So whatever it shipped with keeps running,\nincluding services you never use." },
+    { t: 30.0,  line: "Continuum is a Mac program that sets up the router for you.\nA Meta model makes the changes,\nand the router confirms each one." },
+    { t: 44.0,  line: "It works over the router's Wi-Fi or a cable." },
+    { t: 50.0,  line: "I've reset this ASUS to factory settings and typed continuum.\nMy Mac isn't on the router's network yet,\nso it asks me to join the setup network. I pick it from the menu bar." },
+    { t: 63.0,  line: "It finds the router and marks it as supported.\nI press Enter. Nothing on the router has changed yet." },
+    { t: 74.0,  line: "Step two. Continuum makes a new admin password\nand saves it in my Keychain before sending it.\nThen it logs in with it to check. The model never sees it." },
+    { t: 87.0,  line: "If the router were already set up,\nI'd type its password here once instead." },
+    { t: 95.0,  line: "Step three. I paste my Meta API key, and Continuum lists\nthe models it can use, their prices,\nand the most one step can cost." },
+    { t: 105.0, line: "This is a test router, so I pick Muse Spark 1.3.\nA test call confirms the key." },
+    { t: 112.0, line: "Step four. The model doesn't get a shell.\nIt gets a short list of tools,\nand it reads the router's settings first." },
+    { t: 121.0, line: "File sharing and media streaming were on, and nothing used them.\nIt turned both off. The router confirms the change,\nand that it can be undone." },
+    { t: 130.0, line: "Step five needs a reboot, so it asks me first.\nThen it waits for the router to go down and come back." },
+    { t: 139.0, line: "Step six. The settings survived the reboot." },
+    { t: 145.0, line: "Step seven is the reason for all of this.\nA big upload fills the modem's buffer\nand slows everything else on the network." },
+    { t: 153.0, line: "Continuum asks the router which port is its internet connection\nand which queues its software has.\nThis firmware has no CAKE, so it uses the next one, HTB with fq_codel,\nset a little under my upload speed." },
+    { t: 163.0, line: "Then it reads the rate back from the router. Verified.\nStep eight measures it: the same probes idle and during a big upload,\nand it keeps the result as evidence instead of taking my word for it." },
+    { t: 173.0, line: "From a factory reset to a router that's set up,\ncleaned up and shaped, with the router confirming every step." },
+    { t: 178.0, line: "That's Continuum." },
   ];
 
   const SCENES = [
@@ -216,9 +218,10 @@ Router  en0:192.168.50.1   Phase  reboot_pending   Key  verified
 <span class="dim">--------------------------------------------------------------</span>
 <span class="hi">STEP 7 OF 8   TUNE</span>
 
-Shaping is one CAKE root qdisc on the WAN egress. First a read-only
-preflight checks that the router has tc and reads its current root
-queue. The preflight writes nothing.
+Shaping is one rate-limited queue on the router's WAN egress, the
+best its kernel supports (CAKE, else HTB + fq_codel, HTB + SFQ, TBF).
+First a read-only preflight finds the WAN interface, checks for tc and
+reads the current root queue. The preflight writes nothing.
 
 PERSIST    <span class="ok">verified by the router: new boot identity, owned baseline in force</span>
 
@@ -227,23 +230,24 @@ PERSIST    <span class="ok">verified by the router: new boot identity, owned bas
 
     tuned: `<span class="hd">CONTINUUM / SETUP</span>
 <span class="dim">--------------------------------------------------------------</span>
-<span class="hi">STEP 7 OF 8   TUNE</span>
+<span class="hi">STEP 8 OF 8   MEASURE</span>
 
-Next: write ONE root qdisc and read it back from the router.
+One upload measurement across the WAN: idle probes, then the same
+probes while uploading. Only an upload crosses the shaped queue.
+Nothing on the router is written.
 
 Router  en0:192.168.50.1   Phase  network_qualification_required
 
 PREFLIGHT  tc present; eth0 root queue now: qdisc pfifo_fast 0: root
+QDISC      htb_fq_codel 20000 kbit/s on eth0
+           (tried cake: not in this firmware)
+READBACK   <span class="ok">verified on the router:</span>
+           qdisc htb 1: root r2q 10 default 10
+           qdisc fq_codel 10: parent 1:10 target 5.0ms interval 100.0ms ecn
+           class htb 1:10 root leaf 10: rate 20Mbit ceil 20Mbit
 
-WHY IT STOPPED
-  qdisc_cake_unavailable
-
-WHAT TO DO
-  This firmware's tc has no CAKE queue, so Continuum cannot shape
-  here. Nothing was written; steps 1-6 stand. Press Esc to stop.
-
-<span class="dim">[Esc] Quit    [a] Advanced panels</span>
-<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  </span><span class="hd">[TUNE]</span><span class="dim">  MEASURE</span>`,
+<span class="hd">[Enter] Measure</span>    <span class="dim">[u] Undo shaping</span>
+<span class="dim">BIND  ENROLL  KEY  SETUP  REBOOT  VERIFY  TUNE  </span><span class="hd">[MEASURE]</span>`,
   };
 
   const TUI_CUES = [

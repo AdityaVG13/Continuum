@@ -499,17 +499,27 @@ std::string qos_mode_root_kind(const std::string &mode) {
     return mode;
 }
 
-// Find the WAN egress without assuming a vendor's name for it: the default
-// route's device, else the vendor's nvram WAN names (ASUS/Broadcom firmwares
-// keep them there; they also hold when the WAN cable is out and no default
-// route exists). Absence is data.
+// Find the WAN egress without assuming a vendor's name for it. Candidates in
+// order: the default route's device, then the vendor's nvram WAN names
+// (ASUS/Broadcom firmwares keep them; they hold when the WAN cable is out and
+// no default route exists). The LAN bridge and loopback are never the WAN, and
+// a candidate counts only if tc can show its root queue (seen live: an
+// unplugged GT-AX11000 named a device whose queue tc could not show). Absence
+// is data.
 std::string commission_wan_probe() {
     return "set -eu\n"
-        "ct_if=$(ip route show default 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p' | head -n 1 || true)\n"
-        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan0_gw_ifname 2>/dev/null || true)\n"
-        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan0_ifname 2>/dev/null || true)\n"
-        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan_ifname 2>/dev/null || true)\n"
-        "printf 'CT_DATA_BEGIN\\nwan_interface=%s\\nCT_DATA_END\\n' \"$ct_if\"\n";
+        "ct_lan=$(nvram get lan_ifname 2>/dev/null || true)\n"
+        "ct_route=$(ip route show default 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p' | head -n 1 || true)\n"
+        "ct_gw=$(nvram get wan0_gw_ifname 2>/dev/null || true)\n"
+        "ct_wan0=$(nvram get wan0_ifname 2>/dev/null || true)\n"
+        "ct_wan=$(nvram get wan_ifname 2>/dev/null || true)\n"
+        "ct_if=\n"
+        "for ct_c in \"$ct_route\" \"$ct_gw\" \"$ct_wan0\" \"$ct_wan\"; do\n"
+        " [ -n \"$ct_c\" ] || continue\n"
+        " [ \"$ct_c\" != \"$ct_lan\" ] && [ \"$ct_c\" != lo ] || continue\n"
+        " if tc qdisc show dev \"$ct_c\" 2>/dev/null | grep -q ' root'; then ct_if=$ct_c; break; fi\n"
+        "done\n"
+        "printf 'CT_DATA_BEGIN\\nwan_interface=%s\\nwan_candidates=%s,%s,%s,%s\\nCT_DATA_END\\n' \"$ct_if\" \"$ct_route\" \"$ct_gw\" \"$ct_wan0\" \"$ct_wan\"\n";
 }
 
 std::string commission_wan_interface(const std::string &probe) {

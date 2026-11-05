@@ -3,6 +3,14 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.3.1] - 2026-11-04
+
+- The WAN interface probe only accepts a candidate whose root queue `tc` can
+  show, and never the LAN bridge or loopback. On the GT-AX11000 with no WAN
+  cable, 0.3.0 picked a device `tc` could not show (`qdisc_root_unreadable`);
+  0.3.1 finds `eth0` and installs HTB + fq_codel there, verified at
+  20000 kbit/s on the unit.
+
 ## [0.3.0] - 2026-11-04
 
 - **Shaping works on routers without CAKE.** Step 7 no longer assumes one
