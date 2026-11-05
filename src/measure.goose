@@ -11,7 +11,7 @@ import os;
 namespace continuum;
 
 extern fn ct_probe_run(host: const u8[:], port: i64, path: const u8[:], samples: i64,
-    load_path: const u8[:], load_ms: i64, upload: i64, out: u8[:], length: i64&) -> i32;
+    load_path: const u8[:], load_ms: i64, upload: i64, via: const u8[:], out: u8[:], length: i64&) -> i32;
 
 const MEASURE_MIN_SAMPLES: i64 = 20;
 
@@ -59,7 +59,10 @@ fn measure_sample_arg() -> i64 {
 
 // The artifact is immutable and uniquely named: a measurement is a record of a
 // moment, never something a later run overwrites.
-fn measure_cli(directory: const u8[:], target: const u8[:], load_path: const u8[:], upload: bool) -> i64 {
+// `via` names the interface that reaches the selected router (empty: system
+// route), so the probe crosses the router even when the host has another
+// default route.
+fn measure_cli(directory: const u8[:], target: const u8[:], load_path: const u8[:], upload: bool, via: const u8[:]) -> i64 {
     var host: u8[..256] = ""; var path: u8[..1025] = "/"; var port: i64 = 0;
     if !measure_target(target, host, port, path) {
         print("MEASURE_REFUSED target_must_be_host:port/path");
@@ -77,8 +80,9 @@ fn measure_cli(directory: const u8[:], target: const u8[:], load_path: const u8[
         return 1;
     }
     var buffer: u8[..65536] = [0; 65536]; var n: i64 = 0;
-    if ct_probe_run(host, port, path, samples, load_path, 0, if upload { 1 } else { 0 }, buffer, n) != 0 || n <= 0 || n > buffer.len {
+    if ct_probe_run(host, port, path, samples, load_path, 0, if upload { 1 } else { 0 }, via, buffer, n) != 0 || n <= 0 || n > buffer.len {
         print("MEASURE_REFUSED probe_unavailable");
+        if via.len > 0 { print(str("No answer from ", host, " through the router (via ", via, "). Its internet port has no working connection, so there is nothing to measure yet. Check the cable in the port marked WAN, then press Enter.")); }
         return 1;
     }
     var doc: json::Node[>..] = []; var decoded: u8[>..] = [];

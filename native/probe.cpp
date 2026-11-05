@@ -21,6 +21,7 @@
 
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -30,6 +31,25 @@
 #include <unistd.h>
 
 namespace {
+
+// The interface that reaches the selected router. A Mac often has a second
+// default route (a cable to the ISP box); without this binding the probe would
+// leave by that route and never cross the router whose queue is measured.
+// Empty means the system route. Set once per run, inherited by the load child.
+std::string g_bound_name;
+unsigned g_bound_index = 0;
+
+bool bind_interface(int fd) {
+    if (g_bound_name.empty()) return true;
+#if defined(IP_BOUND_IF)
+    return setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &g_bound_index, sizeof(g_bound_index)) == 0;
+#elif defined(SO_BINDTODEVICE)
+    return setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, g_bound_name.c_str(),
+        static_cast<socklen_t>(g_bound_name.size())) == 0;
+#else
+    return false;
+#endif
+}
 
 double mono_ms() {
     return std::chrono::duration<double, std::milli>(
@@ -66,6 +86,7 @@ bool http_probe(const std::string &host, int port, const std::string &path,
     if (getaddrinfo(host.c_str(), service.c_str(), &hints, &resolved) != 0 || !resolved) return false;
     int fd = socket(resolved->ai_family, resolved->ai_socktype, resolved->ai_protocol);
     if (fd < 0) { freeaddrinfo(resolved); return false; }
+    if (!bind_interface(fd)) { close(fd); freeaddrinfo(resolved); return false; }
     struct timeval timeout {};
     timeout.tv_sec = 2;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -92,7 +113,9 @@ bool http_probe(const std::string &host, int port, const std::string &path,
     int64_t total = 0;
     int64_t body = 0;
     bool headers_done = false;
-    bool accepted = true;
+    // Only a complete status line + header block can accept: the ASUS no-WAN
+    // responder (wanduck) closes without ending its headers.
+    bool accepted = false;
     std::string head;
     char buffer[8192];
     while (ok) {
@@ -106,14 +129,16 @@ bool http_probe(const std::string &host, int port, const std::string &path,
             if (split != std::string::npos) {
                 headers_done = true;
                 const size_t space = head.find(' ');
-                accepted = !upload || (space != std::string::npos && space + 1 < head.size() &&
-                    head[space + 1] == '2');
+                // Both directions need a 2xx: a router with no WAN answers port
+                // 80 itself with a redirect, and timing that measures the LAN.
+                accepted = space != std::string::npos && space + 1 < head.size() &&
+                    head[space + 1] == '2';
                 body += static_cast<int64_t>(head.size() - (split + 4));
                 head.clear();
             } else if (head.size() > 16384) {
                 // Not HTTP as expected; count what arrived rather than losing it.
                 headers_done = true;
-                accepted = !upload;
+                accepted = false;
                 body += static_cast<int64_t>(head.size());
                 head.clear();
             }
@@ -123,7 +148,7 @@ bool http_probe(const std::string &host, int port, const std::string &path,
     }
     elapsed_ms = mono_ms() - started;
     close(fd);
-    if (!ok || total <= 0) return false;
+    if (!ok || total <= 0 || (!upload && !accepted)) return false;
     bytes = upload ? (accepted ? sent_body : 0) : body;
     return true;
 }
@@ -169,7 +194,7 @@ std::string fixed(double value, int places = 3) {
 
 extern "C" int32_t ct_probe_run(ct_bytes host_bytes, int64_t port, ct_bytes path_bytes,
         int64_t samples, ct_bytes load_path_bytes, int64_t load_ms, int64_t upload,
-        ct_output out, int64_t *length) {
+        ct_bytes interface_bytes, ct_output out, int64_t *length) {
     if (!length) return CT_INVALID_ARGUMENT;
     *length = 0;
     if (!host_bytes.data || host_bytes.len <= 0 || host_bytes.len > 253 ||
@@ -177,7 +202,17 @@ extern "C" int32_t ct_probe_run(ct_bytes host_bytes, int64_t port, ct_bytes path
         !load_path_bytes.data || load_path_bytes.len <= 0 || load_path_bytes.len > 1024 ||
         !out.data || out.capacity < 1024 || samples < 1 || samples > 500 ||
         port < 1 || port > 65535 || load_ms < 0 || load_ms > 60000 ||
-        (upload != 0 && upload != 1)) return CT_INVALID_ARGUMENT;
+        (upload != 0 && upload != 1) || interface_bytes.len < 0 || interface_bytes.len > 15 ||
+        (interface_bytes.len > 0 && !interface_bytes.data)) return CT_INVALID_ARGUMENT;
+    g_bound_name.clear(); g_bound_index = 0;
+    if (interface_bytes.len > 0) {
+        g_bound_name.assign(reinterpret_cast<const char *>(interface_bytes.data), static_cast<size_t>(interface_bytes.len));
+        for (char c : g_bound_name)
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+                return CT_INVALID_ARGUMENT;
+        g_bound_index = if_nametoindex(g_bound_name.c_str());
+        if (g_bound_index == 0) return CT_FAILED;
+    }
 
     const std::string host(reinterpret_cast<const char *>(host_bytes.data), static_cast<size_t>(host_bytes.len));
     const std::string path(reinterpret_cast<const char *>(path_bytes.data), static_cast<size_t>(path_bytes.len));

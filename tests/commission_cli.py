@@ -1306,6 +1306,13 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
         qdisc = (device / "qdisc-eth0").read_text() + (device / "class-eth0").read_text()
         assert "qdisc htb 1: root" in qdisc and "qdisc fq_codel 10:" in qdisc and "rate 90Mbit" in qdisc, qdisc
         press(b"\r")
+        # The owner types no address: Enter goes straight to a built-in far end.
+        expect("Run one upload measurement")
+        assert b"speed.cloudflare.com:80/cdn-cgi/trace" in output[output.rfind(b"Run one upload"):], "a default target is offered without typing"
+        press(b"\x1b")
+        expect("Nothing measured.")
+        # [c] is the operator override; this lab points it at the local server.
+        press(b"c")
         expect("Measurement target")
         press(b"\x15" + target.encode() + b"\r")
         expect("Upload path")

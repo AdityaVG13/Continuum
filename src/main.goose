@@ -317,13 +317,13 @@ fn main() {
     if argv.len == 2 && argv[1] == "--takeover-run" {
         exit(continuum::takeover_cli(continuum::setup_directory()));
     }
-    if argv.len == 4 && argv[1] == "--measure" {
-        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3], false));
-    }
-    if argv.len == 5 && argv[1] == "--measure" && argv[4] == "--upload" {
+    if (argv.len == 4 && argv[1] == "--measure") || (argv.len == 5 && argv[1] == "--measure" && argv[4] == "--upload") {
         // Egress shaping only sees what the client sends, so the bufferbloat
-        // check that can move under CAKE is an upload load.
-        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3], true));
+        // check that can move under the router queue is an upload load. The
+        // probe leaves by the interface that reaches the selected router.
+        var bound = continuum::DeviceState {}; var via: u8[..64] = "";
+        if continuum::device_saved(continuum::setup_directory(), bound) && bound.candidate_id.len > 0 { via = bound.connection.interface_id; }
+        exit(continuum::measure_cli(continuum::setup_directory(), argv[2], argv[3], argv.len == 5, via));
     }
     if argv.len == 3 && argv[1] == "--device-mode" {
         let refused = continuum::device_set_mode(continuum::setup_directory(), argv[2]);

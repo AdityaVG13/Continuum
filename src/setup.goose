@@ -778,6 +778,8 @@ fn setup_tune_inputs(net: WizardNetwork&) -> bool {
     if !save_wizard_network(candidate) { return false; }
     net = candidate; return true;
 }
+const MEASURE_DEFAULT_TARGET: const u8[:] = "speed.cloudflare.com:80/cdn-cgi/trace";
+const MEASURE_DEFAULT_LOAD: const u8[:] = "/__up";
 fn setup_measure_inputs(net: WizardNetwork&) -> bool {
     var candidate = net; var target: u8[>..] = []; var load: u8[>..] = [];
     var initial: u8[..128] = "/bulk";
@@ -1075,7 +1077,7 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
     } else if step == 8 && evidence.len == 0 {
         out.append("One upload measurement across the WAN: idle probes, then the same\nprobes while uploading. Only an upload crosses the shaped queue.\nNothing on the router is written.\n");
         if net.target.len > 0 { out.append(str("\n  Target  ", net.target, "\n  Upload  POST ", net.load_path, "   ([c] changes them)\n")); }
-        else { out.append("\nThe first run asks once for a far-end server you control.\n"); }
+        else { out.append(str("\n  Target  ", MEASURE_DEFAULT_TARGET, "\n  Upload  POST ", MEASURE_DEFAULT_LOAD, "   ([c] changes them)\n")); }
     } else if step == 8 {
         out.append("The measurement below is claimable. Qualifying records it as the\nLOAD gate; only a run taken after the last change can count.\n");
     } else {
@@ -1591,7 +1593,14 @@ fn run_setup_tui() -> bool {
                 } else if wstep == 8 && evidence.len == 0 {
                     var net = WizardNetwork {};
                     let loaded = load_wizard_network(net);
-                    if (!loaded || key == 'c' || net.target.len == 0 || net.load_path.len == 0) && !setup_measure_inputs(net) {
+                    // The owner never types an address: a public endpoint that answers
+                    // GET and accepts an upload POST is the default far end. [c] still
+                    // lets an operator name their own server.
+                    if key != 'c' && (!loaded || net.target.len == 0 || net.load_path.len == 0) {
+                        net.target = MEASURE_DEFAULT_TARGET; net.load_path = MEASURE_DEFAULT_LOAD;
+                        if !save_wizard_network(net) { net.target = ""; }
+                    }
+                    if key == 'c' && !setup_measure_inputs(net) {
                         notice.append("Measurement target cancelled or invalid; nothing measured.");
                     } else if net.target.len == 0 || net.load_path.len == 0 { notice.append("A target and an upload path are both required.");
                     } else if !confirm_measure(net) { notice.append("Nothing measured."); }
