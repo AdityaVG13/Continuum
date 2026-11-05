@@ -341,3 +341,6 @@ html, body {
 /* Offline render (?render=1): frames are stepped, so wall-clock CSS
    transitions would smear across frames. Cuts are exact instead. */
 #app.render *, #app.render *::before, #app.render *::after { transition: none !important; animation: none !important; }
+
+/* Soft-focus the 3D set: it reads as light and depth behind the live screens. */
+#c { filter: blur(7px) saturate(1.35) brightness(0.95) contrast(1.1); transform: scale(1.06); }

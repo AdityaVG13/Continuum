@@ -742,7 +742,7 @@ READBACK   <span class="ok">verified on the router:</span>
   // The voiceover was recorded faster than the cue sheet, then padded with
   // pauses to 3:00 (each pause sits after a line so its screen can be read).
   // WARP maps voice time to cue-sheet time: [voice start of each line, cue t].
-  const WARP = [[0, 0], [4.64, 6], [10.05, 14], [14.45, 23], [20.14, 30], [27.68, 44], [34.07, 50], [45.45, 63], [56.75, 74], [69.11, 87], [75.91, 95], [86.16, 105], [95.18, 112], [104.24, 121], [116.11, 130], [125.9, 139], [131.96, 145], [140.09, 153], [155.09, 163], [169.61, 173], [176.33, 178], [180, 180]];
+  const WARP = [[0, 0], [2.64, 6], [8.05, 14], [12.45, 23], [17.14, 30], [23.68, 44], [28.07, 50], [36.45, 63], [43.75, 74], [52.11, 87], [56.91, 95], [64.16, 105], [70.18, 112], [76.24, 121], [84.11, 130], [90.9, 139], [94.96, 145], [102.09, 153], [114.09, 163], [125.61, 173], [131.33, 178], [134.13, 180]];
   const warp = (t) => {
     for (let i = 1; i < WARP.length; i++) {
       const [a, fa] = WARP[i - 1], [b, fb] = WARP[i];
