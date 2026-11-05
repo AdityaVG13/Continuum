@@ -90,47 +90,93 @@ def device_command():
             intended = (process / "intended").read_text().strip()
             if intended in names:
                 (process / "comm").write_text((intended if enabled else "stopped") + "\n")
+    elif name == "ip":
+        # The router's routing table: its default route names the WAN device.
+        # CT_COMMISSION_DEVICE_NO_ROUTE models a WAN with no cable (no route).
+        assert args == ["route", "show", "default"], "unsupported modeled ip command: " + repr(args)
+        if not os.environ.get("CT_COMMISSION_DEVICE_NO_ROUTE"):
+            print("default via 203.0.113.1 dev eth0 proto dhcp")
     elif name == "tc":
         # Modeled kernel qdisc state, not synthetic timing numbers. The real
         # generated program runs; only the applet is substituted. Absence is
         # explicit data so the capability probe cannot masquerade as success.
+        # CT_COMMISSION_DEVICE_TC_MISSING lists qdiscs this kernel lacks
+        # (comma-separated, e.g. "cake" for stock vendor firmware).
         if os.environ.get("CT_COMMISSION_DEVICE_TC") == "absent":
             raise SystemExit(127)
         state = root / "qdisc-eth0"
+        classes = root / "class-eth0"
         default = ("qdisc pfifo_fast 0: root refcnt 2 bands 3 "
                    "priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1\n")
+        missing = set(filter(None, os.environ.get("CT_COMMISSION_DEVICE_TC_MISSING", "").split(",")))
+        if os.environ.get("CT_COMMISSION_DEVICE_TC_NO_CAKE"):
+            missing.add("cake")
+
+        def shown(spec_rate):
+            assert spec_rate.endswith("kbit"), spec_rate
+            rate = int(spec_rate.removesuffix("kbit"))
+            clamp = os.environ.get("CT_COMMISSION_DEVICE_QDISC_CLAMP")
+            if clamp:
+                rate = min(rate, int(clamp))
+            # tc prints rates with %g in the largest unit, so a 90000kbit
+            # request reads back as "90Mbit"; the adapter must normalize.
+            return f"{rate / 1000:g}Mbit" if rate >= 1000 else f"{rate:g}Kbit"
+
+        def refuse_missing(kind, option):
+            if kind in missing:
+                print(f'Unknown qdisc "{kind}", hence option "{option}" is unparsable', file=sys.stderr)
+                raise SystemExit(1)
+
         if args == ["-V"]:
             print("tc utility, iproute2-6.1.0")
         elif args[:3] == ["qdisc", "show", "dev"] and len(args) == 4:
             print(state.read_text() if state.is_file() else default, end="")
-        elif args[:3] == ["qdisc", "replace", "dev"] and len(args) >= 5:
-            assert args[3] == "eth0" and args[4] == "root", "unsupported modeled qdisc"
+        elif args[:3] == ["class", "show", "dev"] and len(args) == 4:
+            print(classes.read_text() if classes.is_file() else "", end="")
+        elif args[:3] == ["qdisc", "replace", "dev"] and len(args) >= 5 and args[4] == "root":
+            assert args[3] == "eth0", "unsupported modeled interface"
             spec = args[5:]
-            if spec[:1] == ["cake"] and os.environ.get("CT_COMMISSION_DEVICE_TC_NO_CAKE"):
-                # Stock vendor iproute2 without the CAKE qdisc, as tc reports it.
-                print('Unknown qdisc "cake", hence option "bandwidth" is unparsable', file=sys.stderr)
-                raise SystemExit(1)
             if spec[:1] == ["cake"]:
+                refuse_missing("cake", "bandwidth")
                 assert spec[1] == "bandwidth" and spec[3] == "overhead", spec
-                assert spec[2].endswith("kbit"), spec
-                rate = int(spec[2].removesuffix("kbit"))
-                clamp = os.environ.get("CT_COMMISSION_DEVICE_QDISC_CLAMP")
-                if clamp:
-                    rate = min(rate, int(clamp))
-                # tc prints rates with %g in the largest unit, so a 90000kbit
-                # request reads back as "90Mbit"; the adapter must normalize.
-                shown = (f"{rate / 1000:g}Mbit" if rate >= 1000 else f"{rate:g}Kbit")
+                classes.unlink(missing_ok=True)
                 state.write_text(
-                    "qdisc cake 8001: root refcnt 2 bandwidth " + shown +
+                    "qdisc cake 8001: root refcnt 2 bandwidth " + shown(spec[2]) +
                     " overhead " + spec[4] + " diffserv3 triple-isolate nonat\n")
             elif spec[:1] == ["fq_codel"]:
+                refuse_missing("fq_codel", "limit")
                 assert spec[1] == "limit", spec
+                classes.unlink(missing_ok=True)
                 state.write_text("qdisc fq_codel 8002: root refcnt 2 limit " + spec[2] +
                                  "p flows 1024 quantum 1514 target 5ms interval 100ms\n")
+            elif spec[:4] == ["handle", "1:", "htb", "default"]:
+                refuse_missing("htb", "default")
+                classes.write_text("")
+                state.write_text("qdisc htb 1: root refcnt 2 r2q 10 default 0x10 direct_packets_stat 0\n")
+            elif spec[:1] == ["tbf"]:
+                refuse_missing("tbf", "rate")
+                assert spec[1] == "rate" and spec[3] == "burst" and spec[5] == "latency", spec
+                classes.unlink(missing_ok=True)
+                state.write_text("qdisc tbf 8003: root refcnt 2 rate " + shown(spec[2]) +
+                                 " burst " + spec[4] + "b lat " + spec[6] + "\n")
             else:
-                raise AssertionError("unsupported modeled qdisc mode")
+                raise AssertionError("unsupported modeled qdisc mode: " + repr(spec))
+        elif args[:3] == ["class", "replace", "dev"]:
+            assert args[3:9] == ["eth0", "parent", "1:", "classid", "1:10", "htb"], args
+            assert state.read_text().startswith("qdisc htb 1:"), "an HTB class needs the HTB root"
+            assert args[9] == "rate" and args[11] == "ceil", args
+            classes.write_text("class htb 1:10 root prio 0 rate " + shown(args[10]) + " ceil " +
+                               shown(args[12]) + " burst 1600b cburst 1600b\n")
+        elif args[:3] == ["qdisc", "replace", "dev"] and args[4:8] == ["parent", "1:10", "handle", "10:"]:
+            assert args[3] == "eth0" and classes.is_file() and classes.read_text(), "a leaf needs its class"
+            leaf = args[8]
+            refuse_missing(leaf, args[9] if len(args) > 9 else "limit")
+            text = {"fq_codel": "qdisc fq_codel 10: parent 1:10 limit 10240p flows 1024 quantum 1514 target 5ms interval 100ms\n",
+                    "sfq": "qdisc sfq 10: parent 1:10 limit 127p quantum 1514b depth 127 divisor 1024 perturb 10sec\n"}[leaf]
+            state.write_text(state.read_text().splitlines()[0] + "\n" + text)
         elif args[:3] == ["qdisc", "del", "dev"] and len(args) == 5:
             assert args[3] == "eth0" and args[4] == "root"
+            classes.unlink(missing_ok=True)
             state.write_text(default)
         else:
             raise AssertionError("unsupported modeled tc command: " + repr(args))
@@ -326,7 +372,7 @@ def main():
             (process / "comm").write_text(name + "\n")
             (process / "intended").write_text(name + "\n")
             (process / "status").write_text(f"Name:\t{name}\nVmRSS:\t{rss} kB\n")
-        for command in ("nvram", "service", "id", "nohup", "reboot", "tc"):
+        for command in ("nvram", "service", "id", "nohup", "reboot", "tc", "ip"):
             (device / "bin" / command).symlink_to(Path(__file__).resolve())
         request("/applyapp.cgi", {
             "firmver": "3.0.0.4", "buildno": "test", "extendno": "1",
@@ -474,7 +520,7 @@ def main():
         assert "cake" in qdisc_text and "bandwidth 90Mbit" in qdisc_text and "overhead 18" in qdisc_text
         assert read_device() == before, "a qdisc profile must not rewrite service flags"
         for bad, reason in (({"COMMISSION_QOS_KBPS": "100001"}, "qos_bandwidth_out_of_range"),
-                            ({"COMMISSION_QOS_IFACE": "lan0"}, "qos_interface_unsupported"),
+                            ({"COMMISSION_QOS_IFACE": "eth0;reboot"}, "qos_interface_unsupported"),
                             ({"COMMISSION_QOS_MODE": "sfq"}, "qos_mode_unsupported"),
                             ({"COMMISSION_QOS_OVERHEAD": "201"}, "qos_overhead_out_of_range")):
             refused_qos = subprocess.run([binary], env=dict(qos, **bad),
@@ -499,6 +545,29 @@ def main():
         assert no_cake.returncode != 0 and "qdisc_cake_unavailable" in no_cake.stdout, (
             "a tc without CAKE must be named: " + no_cake.stdout + no_cake.stderr)
         assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast")
+        # "auto" is the product default: the WAN device comes from the router's
+        # default route, and the queue is the first the kernel accepts. Each
+        # modeled firmware lacks a different set; every rung must rate-limit and
+        # read the requested rate back from the router.
+        auto = dict(qos, COMMISSION_QOS_MODE="auto", COMMISSION_QOS_IFACE="auto")
+        for missing, mode, needle in (("cake", "htb_fq_codel", "qdisc fq_codel 10: parent 1:10"),
+                                      ("cake,fq_codel", "htb_sfq", "qdisc sfq 10: parent 1:10"),
+                                      ("cake,fq_codel,sfq", "tbf", "qdisc tbf 8003: root")):
+            rung = subprocess.run([binary], env=dict(auto, CT_COMMISSION_DEVICE_TC_MISSING=missing),
+                                  text=True, capture_output=True, timeout=60)
+            assert rung.returncode == 0, missing + ": " + rung.stdout + rung.stderr
+            got = [json.loads(line) for line in rung.stdout.splitlines() if line.startswith("{")][-1]
+            assert got["qos_mode"] == mode and got["qos_requested"] == "auto", got
+            assert got["qos_interface"] == "eth0" and got["rate_readback"] == "verified", got
+            assert got["qos_tried"].startswith("cake:refused"), got
+            shaped = (device / "qdisc-eth0").read_text() + ((device / "class-eth0").read_text()
+                      if (device / "class-eth0").is_file() else "")
+            assert needle in shaped and "rate 90Mbit" in shaped, shaped
+        none = subprocess.run([binary], env=dict(auto, CT_COMMISSION_DEVICE_TC_MISSING="cake,htb,tbf"),
+                              text=True, capture_output=True, timeout=60)
+        assert none.returncode != 0 and "qdisc_shaping_unavailable" in none.stdout, none.stdout + none.stderr
+        assert (device / "qdisc-eth0").read_text().startswith("qdisc pfifo_fast"), (
+            "a kernel that refuses every shaping queue must be left at its default root")
         fq = subprocess.run([binary], env=dict(qos, COMMISSION_QOS_MODE="fq_codel",
                                                COMMISSION_QOS_KBPS="80000"),
                             text=True, capture_output=True, timeout=60)
@@ -1092,6 +1161,7 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
     env = dict(base_env, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color",
                NO_COLOR="1", CONTINUUM_AGENT_FIXTURE="commission", ROUTER_OUTAGE_FILE=str(outage_file),
                CT_COMMISSION_DEVICE_OUTAGE_MS="5000", CT_COMMISSION_SSH_DROP_REBOOT="1",
+               CT_COMMISSION_DEVICE_TC_MISSING="cake",
                # Every provider request after the picker must carry the model and
                # effort the owner chose on screen, not the stale settings file.
                CONTINUUM_FIXTURE_MODEL="muse-spark-1.3", CONTINUUM_FIXTURE_EFFORT="low")
@@ -1227,15 +1297,14 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
         press(b"\r")
         expect("Upload bandwidth")
         press(b"\x1590000\r")
-        expect("WAN interface")
-        press(b"\x15eth0\r")
-        expect("Write ONE root qdisc")
-        expect("cake bandwidth 90000kbit overhead 0")
+        expect("Write ONE shaping queue")
+        expect("at 90000 kbit/s")
         press(b"\r")
         expect("READBACK   verified", 120)
         assert b"STEP 8 OF 8" in output[output.rfind(b"READBACK") - 3000:], "a verified qdisc advances to MEASURE"
-        qdisc = (device / "qdisc-eth0").read_text()
-        assert "cake" in qdisc and "bandwidth 90Mbit" in qdisc, qdisc
+        # This modeled firmware has no CAKE (like stock ASUS): auto falls back.
+        qdisc = (device / "qdisc-eth0").read_text() + (device / "class-eth0").read_text()
+        assert "qdisc htb 1: root" in qdisc and "qdisc fq_codel 10:" in qdisc and "rate 90Mbit" in qdisc, qdisc
         press(b"\r")
         expect("Measurement target")
         press(b"\x15" + target.encode() + b"\r")
@@ -1297,7 +1366,7 @@ def drive_wizard(unified, base_env, directory, port, device, outage_file):
 
 
 if __name__ == "__main__":
-    if Path(sys.argv[0]).name in ("nvram", "service", "id", "nohup", "reboot", "tc"):
+    if Path(sys.argv[0]).name in ("nvram", "service", "id", "nohup", "reboot", "tc", "ip"):
         device_command()
     else:
         main()

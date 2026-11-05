@@ -439,16 +439,17 @@ bool qdisc_default_kind(const std::string &show) {
 }
 
 // `tc` prints rates with %g in the largest unit (90000kbit -> "90Mbit" or
-// "90000Kbit"), so compare normalized kilobits rather than display text.
-bool qdisc_cake_rate_kbit(const std::string &show, double &kbit) {
-    size_t p = show.find("bandwidth ");
+// "90000Kbit"), so compare normalized kilobits rather than display text. The
+// key is "bandwidth " for CAKE and "rate " for HTB classes and TBF.
+bool qdisc_rate_kbit(const std::string &text, const std::string &key, double &kbit) {
+    size_t p = text.find(key);
     if (p == std::string::npos) return false;
-    p += 10;
+    p += key.size();
     size_t e = p;
-    while (e < show.size() && (std::isdigit((unsigned char)show[e]) || show[e] == '.')) e++;
+    while (e < text.size() && (std::isdigit((unsigned char)text[e]) || text[e] == '.')) e++;
     if (e == p) return false;
-    double value = std::strtod(show.substr(p, e - p).c_str(), nullptr);
-    std::string unit = show.substr(e, 4);
+    double value = std::strtod(text.substr(p, e - p).c_str(), nullptr);
+    std::string unit = text.substr(e, 4);
     for (auto &c : unit) c = (char)std::tolower((unsigned char)c);
     if (unit.rfind("gbit", 0) == 0) value *= 1000000.0;
     else if (unit.rfind("mbit", 0) == 0) value *= 1000.0;
@@ -457,6 +458,69 @@ bool qdisc_cake_rate_kbit(const std::string &show, double &kbit) {
     else return false;
     kbit = value;
     return true;
+}
+
+// The first line of `text` that contains `needle`, or "".
+std::string qdisc_line_with(const std::string &text, const std::string &needle) {
+    size_t at = text.find(needle);
+    if (at == std::string::npos) return "";
+    size_t begin = text.rfind('\n', at);
+    begin = begin == std::string::npos ? 0 : begin + 1;
+    size_t end = text.find('\n', at);
+    return text.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+}
+
+// Interface names come from the router (default route or nvram) or the owner;
+// either way they reach a shell, so only kernel-legal name bytes pass.
+bool qos_interface_valid(const std::string &iface) {
+    if (iface.empty() || iface.size() > 15 || iface[0] == '-' || iface == "." || iface == "..") return false;
+    for (unsigned char c : iface)
+        if (!std::isalnum(c) && c != '.' && c != '_' && c != '-') return false;
+    return true;
+}
+
+// Shaping modes, most capable first. "auto" walks this list on the router and
+// keeps the first one its kernel and tc accept: CAKE where present (OpenWrt,
+// Merlin), else HTB with an fq_codel leaf, else HTB with SFQ, else TBF -- all
+// of which rate-limit egress so the queue forms on the router, where it is
+// managed, instead of in the modem. fq_codel alone does not rate-limit and is
+// only reachable by name.
+const char *const kQdiscShapingChain[] = {"cake", "htb_fq_codel", "htb_sfq", "tbf"};
+
+bool qos_mode_valid(const std::string &mode) {
+    if (mode == "auto" || mode == "fq_codel") return true;
+    for (const char *m : kQdiscShapingChain) if (mode == m) return true;
+    return false;
+}
+
+// The root qdisc kind a verified mode leaves behind (what `tc qdisc show` names).
+std::string qos_mode_root_kind(const std::string &mode) {
+    if (mode == "htb_fq_codel" || mode == "htb_sfq") return "htb";
+    return mode;
+}
+
+// Find the WAN egress without assuming a vendor's name for it: the default
+// route's device, else the vendor's nvram WAN names (ASUS/Broadcom firmwares
+// keep them there; they also hold when the WAN cable is out and no default
+// route exists). Absence is data.
+std::string commission_wan_probe() {
+    return "set -eu\n"
+        "ct_if=$(ip route show default 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p' | head -n 1 || true)\n"
+        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan0_gw_ifname 2>/dev/null || true)\n"
+        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan0_ifname 2>/dev/null || true)\n"
+        "[ -n \"$ct_if\" ] || ct_if=$(nvram get wan_ifname 2>/dev/null || true)\n"
+        "printf 'CT_DATA_BEGIN\\nwan_interface=%s\\nCT_DATA_END\\n' \"$ct_if\"\n";
+}
+
+std::string commission_wan_interface(const std::string &probe) {
+    const std::string key = "wan_interface=";
+    size_t p = probe.find(key);
+    if (p == std::string::npos) return "";
+    p += key.size();
+    size_t e = probe.find('\n', p);
+    std::string iface = probe.substr(p, e == std::string::npos ? std::string::npos : e - p);
+    while (!iface.empty() && (iface.back() == '\r' || iface.back() == ' ')) iface.pop_back();
+    return qos_interface_valid(iface) ? iface : "";
 }
 
 // Absence is data, not a shell exit code the caller has to decode: the probe
@@ -472,26 +536,72 @@ std::string commission_qdisc_probe(const std::string &iface) {
         "printf 'CT_DATA_END\\n'\n";
 }
 
+// One mode's install. A refused step is data, not a bare exit 1 (seen live on a
+// GT-AX11000: "ssh_program_exit_1" with nothing to act on): tc's own first
+// lines come back framed, and a half-built HTB tree is removed so the next mode
+// in the chain starts from the kernel default. Vendor kernels often ship these
+// qdiscs as modules that are not loaded at boot, so each is modprobed first.
 std::string commission_qdisc_apply(const std::string &iface, const std::string &mode,
                                    long kbps, long overhead) {
-    const std::string shape = mode == "cake"
-        ? "cake bandwidth " + std::to_string(kbps) + "kbit overhead " + std::to_string(overhead)
-        : "fq_codel limit 10240";
-    // A refused replace is data, not a bare exit 1 (seen live on a GT-AX11000:
-    // "ssh_program_exit_1" with nothing to act on): tc's own first lines come
-    // back framed so the adapter can name the cause. Some vendor kernels ship
-    // CAKE as a module that is not loaded at boot.
-    return std::string("set -eu\n") +
-        (mode == "cake" ? "modprobe sch_cake >/dev/null 2>&1 || true\n" : "") +
-        "if ! ct_err=$(tc qdisc replace dev " + iface + " root " + shape + " 2>&1); then\n"
+    const std::string rate = std::to_string(kbps) + "kbit";
+    std::vector<std::string> modules, steps;
+    if (mode == "cake") {
+        modules = {"sch_cake"};
+        steps = {"qdisc replace dev " + iface + " root cake bandwidth " + rate +
+                 " overhead " + std::to_string(overhead)};
+    } else if (mode == "htb_fq_codel" || mode == "htb_sfq") {
+        const bool fq = mode == "htb_fq_codel";
+        modules = {"sch_htb", fq ? "sch_fq_codel" : "sch_sfq"};
+        steps = {"qdisc replace dev " + iface + " root handle 1: htb default 10",
+                 "class replace dev " + iface + " parent 1: classid 1:10 htb rate " + rate + " ceil " + rate,
+                 "qdisc replace dev " + iface + " parent 1:10 handle 10: " +
+                     (fq ? std::string("fq_codel") : std::string("sfq perturb 10"))};
+    } else if (mode == "tbf") {
+        // Burst holds ~10 ms at the rate (kbps * 1000 / 8 / 100 bytes), never
+        // below what one full-size frame plus headroom needs.
+        modules = {"sch_tbf"};
+        steps = {"qdisc replace dev " + iface + " root tbf rate " + rate + " burst " +
+                 std::to_string(std::max(4096L, kbps * 5 / 4)) + " latency 50ms"};
+    } else {
+        steps = {"qdisc replace dev " + iface + " root fq_codel limit 10240"};
+    }
+    std::string program = "set -eu\n"
+        "ct_fail() {\n"
         " printf 'CT_DATA_BEGIN\\nqdisc_apply=refused\\n'\n"
-        " printf '%s\\n' \"$ct_err\" | head -n 3\n"
+        " printf '%s\\n' \"$1\" | head -n 3\n"
         " printf 'CT_DATA_END\\n'\n"
+        " tc qdisc del dev " + iface + " root >/dev/null 2>&1 || true\n"
         " exit 0\n"
-        "fi\n"
-        "printf 'CT_DATA_BEGIN\\n'\n"
+        "}\n";
+    for (const auto &m : modules) program += "modprobe " + m + " >/dev/null 2>&1 || true\n";
+    for (const auto &step : steps)
+        program += "ct_err=$(tc " + step + " 2>&1) || ct_fail \"$ct_err\"\n";
+    program += "printf 'CT_DATA_BEGIN\\n'\n"
         "tc qdisc show dev " + iface + "\n"
+        "tc class show dev " + iface + " 2>/dev/null || true\n"
         "printf 'CT_DATA_END\\n'\n";
+    return program;
+}
+
+// Readback for one mode: the router, not the request, says what is installed.
+// rate is "verified" when the router holds the requested rate within 1 kbit/s,
+// "not_applicable" for the unshaped fq_codel mode.
+bool qdisc_mode_verified(const std::string &after, const std::string &mode, long kbps, std::string &rate) {
+    rate = mode == "fq_codel" ? "not_applicable" : "pending";
+    if (qdisc_root_kind(after) != qos_mode_root_kind(mode)) return false;
+    if (mode == "fq_codel") return true;
+    double readback = 0;
+    bool read = false;
+    if (mode == "cake") read = qdisc_rate_kbit(after, "bandwidth ", readback);
+    else if (mode == "tbf") read = qdisc_rate_kbit(qdisc_line_with(after, " root"), "rate ", readback);
+    else {
+        const std::string leaf = mode == "htb_fq_codel" ? "qdisc fq_codel 10:" : "qdisc sfq 10:";
+        if (after.find(leaf) == std::string::npos) return false;
+        read = qdisc_rate_kbit(qdisc_line_with(after, "class htb 1:10"), "rate ", readback);
+    }
+    if (!read || std::fabs(readback - (double)kbps) > 1.0) return false;
+    rate = "verified";
+    return true;
 }
 
 std::string commission_qdisc_restore(const std::string &iface) {
@@ -526,7 +636,7 @@ std::string qos_owned_interface(const std::string &directory) {
     if (!commission_load(directory + "/qos-owned.txt", saved)) return "";
     const size_t nl = saved.find('\n');
     const std::string iface = nl == std::string::npos ? "" : saved.substr(0, nl);
-    return (iface == "eth0" || iface == "ppp0") ? iface : "";
+    return qos_interface_valid(iface) ? iface : "";
 }
 
 
@@ -828,20 +938,31 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         std::string op, iface, mode;
         long kbps = 0, overhead = 0;
         if (!str_field(body, "qos_op", 8, true, op) ||
-            !str_field(body, "qos_interface", 8, false, iface))
+            !str_field(body, "qos_interface", 16, false, iface))
             return fail("qos_profile_invalid");
         if (op != "apply" && op != "restore" && op != "status") return fail("qos_operation_unsupported");
-        if (iface.empty() && (op == "restore" || op == "status")) iface = qos_owned_interface(directory);
-        if (iface.empty() && op == "status") iface = "eth0";
-        if (iface != "eth0" && iface != "ppp0") return fail("qos_interface_unsupported");
+        if ((iface.empty() || iface == "auto") && (op == "restore" || op == "status"))
+            iface = qos_owned_interface(directory);
+        if (iface == "auto") iface.clear();
+        if (!iface.empty() && !qos_interface_valid(iface)) return fail("qos_interface_unsupported");
         if (op == "apply") {
             if (!str_field(body, "qos_mode", 16, true, mode) ||
                 !json_int(body, "qos_bandwidth_kbps", kbps) ||
                 !json_int(body, "qos_overhead_bytes", overhead))
                 return fail("qos_profile_invalid");
-            if (mode != "cake" && mode != "fq_codel") return fail("qos_mode_unsupported");
+            if (!qos_mode_valid(mode)) return fail("qos_mode_unsupported");
             if (kbps < 256 || kbps > 100000) return fail("qos_bandwidth_out_of_range");
             if (overhead < 0 || overhead > 200) return fail("qos_overhead_out_of_range");
+        }
+        // No interface named (or "auto"): ask the router which device carries
+        // its default route / WAN, instead of assuming one vendor's name.
+        if (iface.empty()) {
+            std::string wan;
+            if (!ct_commission_ssh(connection, commission_wan_probe(), wan, 20, &transport_diagnostic))
+                return fail(transport_diagnostic.empty() ? "wan_interface_probe_unavailable"
+                                                         : transport_diagnostic.c_str());
+            iface = commission_wan_interface(wan);
+            if (iface.empty()) return fail("wan_interface_unknown");
         }
         std::string probe;
         if (!ct_commission_ssh(connection, commission_qdisc_probe(iface), probe, 20,
@@ -909,33 +1030,42 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
         } else if (!commission_save(directory + "/qos-before.txt", probe, true)) {
             return fail("qos_baseline_not_durable");
         }
-        std::string after;
-        bool ran = ct_commission_ssh(connection,
-            commission_qdisc_apply(iface, mode, kbps, overhead), after, 30,
-            &transport_diagnostic);
-        bool verified = false;
-        std::string rate = mode == "cake" ? "pending" : "not_applicable";
-        if (ran && qdisc_root_kind(after) == mode) {
-            if (mode == "fq_codel") {
-                verified = true;
-            } else {
-                double readback = 0;
-                if (qdisc_cake_rate_kbit(after, readback) &&
-                    std::fabs(readback - (double)kbps) <= 1.0) {
-                    rate = "verified";
-                    verified = true;
-                }
+        // "auto" tries the shaping chain in order and keeps the first mode this
+        // router's kernel and tc accept; a named mode is tried alone. A refused
+        // mode installed nothing (its program removes a partial tree), so the
+        // next starts from the same baseline. Refusals stay private beside the
+        // recovery baseline for diagnosis; the receipt lists what was tried.
+        std::vector<std::string> chain;
+        if (mode == "auto") chain.assign(std::begin(kQdiscShapingChain), std::end(kQdiscShapingChain));
+        else chain.push_back(mode);
+        const std::string requested = mode;
+        std::string after, tried, refusals, rate = "pending";
+        bool ran = false, verified = false, all_refused = true;
+        for (const auto &candidate : chain) {
+            after.clear();
+            ran = ct_commission_ssh(connection,
+                commission_qdisc_apply(iface, candidate, kbps, overhead), after, 30,
+                &transport_diagnostic);
+            if (ran && after.find("qdisc_apply=refused") != std::string::npos) {
+                tried += (tried.empty() ? "" : ",") + candidate + ":refused";
+                refusals += "== " + candidate + "\n" + after + "\n";
+                continue;
             }
+            all_refused = false;
+            mode = candidate;
+            verified = ran && qdisc_mode_verified(after, candidate, kbps, rate);
+            tried += (tried.empty() ? "" : ",") + candidate + (verified ? ":verified" : ":unverified");
+            break;
         }
-        if (ran && after.find("qdisc_apply=refused") != std::string::npos) {
-            // tc refused before installing anything; its words stay private
-            // beside the recovery baseline for diagnosis.
-            (void)commission_save(directory + "/qos-refused.txt", after, true);
-            return fail(mode == "cake" && (after.find("nknown qdisc") != std::string::npos ||
-                                           after.find("cake") != std::string::npos ||
-                                           after.find("not supported") != std::string::npos ||
-                                           after.find("No such file") != std::string::npos)
-                ? "qdisc_cake_unavailable" : "qdisc_apply_refused");
+        if (!refusals.empty()) (void)commission_save(directory + "/qos-refused.txt", refusals, true);
+        if (ran && all_refused) {
+            const bool cake_missing = requested == "cake" &&
+                (refusals.find("nknown qdisc") != std::string::npos ||
+                 refusals.find("cake") != std::string::npos ||
+                 refusals.find("not supported") != std::string::npos ||
+                 refusals.find("No such file") != std::string::npos);
+            return fail(requested == "auto" ? "qdisc_shaping_unavailable"
+                        : cake_missing ? "qdisc_cake_unavailable" : "qdisc_apply_refused");
         }
         if (!verified) {
             // A failed or misread apply may still have reached the device.
@@ -949,10 +1079,13 @@ int32_t commission_execute(Session &s, const std::string &body, const std::strin
                             : (transport_diagnostic.empty() ? "qos_apply_failed"
                                                             : transport_diagnostic.c_str()));
         }
-        if (!commission_save(directory + "/qos-owned.txt", iface + "\n" + mode + "\n", true))
+        // The marker holds the root kind tc reports (htb for both HTB modes), the
+        // value qdisc_owned compares against on the next apply.
+        if (!commission_save(directory + "/qos-owned.txt", iface + "\n" + qos_mode_root_kind(mode) + "\n", true))
             return fail("qos_ownership_not_durable");
         std::string receipt = "{\"phase\":\"qos_applied\",\"authenticated\":true,"
-            "\"qos_verified\":true,\"qos_mode\":\"" + mode + "\",\"qos_interface\":\"" +
+            "\"qos_verified\":true,\"qos_mode\":\"" + mode + "\",\"qos_requested\":\"" + requested +
+            "\",\"qos_tried\":\"" + tried + "\",\"qos_interface\":\"" +
             iface + "\",\"bandwidth_kbps\":" + std::to_string(kbps) +
             ",\"overhead_bytes\":" + std::to_string(overhead) +
             ",\"rate_readback\":\"" + rate + "\",\"before_qdisc\":\"" +

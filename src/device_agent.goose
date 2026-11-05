@@ -93,8 +93,7 @@ fn device_qos_profile(payload: const u8[:], profile: QosProfile&) -> bool {
     let overhead, h = json::as_i64(json::member(root, "overhead_bytes"));
     if !b || !i || !m || !h { return false; }
     if bandwidth < 256 || bandwidth > 100000 || overhead < 0 || overhead > 200 { return false; }
-    if iface != "eth0" && iface != "ppp0" { return false; }
-    if mode != "cake" && mode != "fq_codel" { return false; }
+    if !qos_interface_ok(iface) || !qos_mode_ok(mode) { return false; }
     profile.bandwidth_kbps = bandwidth;
     profile.interface_id = iface;
     profile.mode = mode;

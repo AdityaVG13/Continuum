@@ -726,10 +726,10 @@ struct WizardNetwork {
     target: u8[..128] = "",
     load_path: u8[..128] = "",
     upload_kbps: i64 = 0,
-    interface_id: u8[..8] = "eth0",
+    interface_id: u8[..16] = "auto",
 }
 fn wizard_network_valid(net: WizardNetwork) -> bool {
-    if net.interface_id != "eth0" && net.interface_id != "ppp0" { return false; }
+    if !qos_interface_ok(net.interface_id) { return false; }
     // The adapter's own profile bounds; 0 means "not chosen yet".
     if net.upload_kbps != 0 && (net.upload_kbps < 256 || net.upload_kbps > 100000) { return false; }
     if net.load_path.len > 0 && net.load_path[0] != '/' { return false; }
@@ -751,7 +751,7 @@ fn load_wizard_network(net: WizardNetwork&) -> bool {
     let load, l = json::as_string(json::member(root, "load_path"));
     let kbps, k = json::as_i64(json::member(root, "upload_kbps"));
     let iface, i = json::as_string(json::member(root, "interface"));
-    if !t || !l || !k || !i || target.len > 128 || load.len > 128 || iface.len > 8 { return false; }
+    if !t || !l || !k || !i || target.len > 128 || load.len > 128 || iface.len > 15 { return false; }
     var candidate = WizardNetwork {};
     candidate.target = target; candidate.load_path = load; candidate.upload_kbps = kbps; candidate.interface_id = iface;
     if !wizard_network_valid(candidate) { return false; }
@@ -769,10 +769,12 @@ fn save_wizard_network(net: WizardNetwork) -> bool {
     return write_file_atomic(str(directory, "/network.json"), text);
 }
 fn setup_tune_inputs(net: WizardNetwork&) -> bool {
-    var candidate = net; var kbps: i64 = net.upload_kbps; var iface: u8[>..] = [];
+    // The WAN interface is the router's to report (default route, then vendor
+    // nvram); only the upload rate is the owner's to know.
+    var candidate = net; var kbps: i64 = net.upload_kbps;
     if !setup_number("Upload bandwidth to shape to, kbit/s (256..100000; a little under your line's upload)", kbps, kbps) ||
-        !setup_field("WAN interface (eth0, or ppp0 for PPPoE)", net.interface_id, iface) || iface.len > 8 || kbps < 256 { return false; }
-    candidate.upload_kbps = kbps; candidate.interface_id = iface;
+        kbps < 256 { return false; }
+    candidate.upload_kbps = kbps;
     if !save_wizard_network(candidate) { return false; }
     net = candidate; return true;
 }
@@ -791,7 +793,7 @@ fn setup_qos_profile(net: WizardNetwork) -> u8[>..] {
     var out: u8[>..] = [];
     out.append(str("{\"bandwidth_kbps\":", net.upload_kbps, ",\"interface\":"));
     json::format_string(out, net.interface_id);
-    out.append(",\"mode\":\"cake\",\"overhead_bytes\":0}");
+    out.append(",\"mode\":\"auto\",\"overhead_bytes\":0}");
     return out;
 }
 fn setup_confirm(frame: const u8[:]) -> bool {
@@ -808,8 +810,8 @@ fn confirm_qos_apply(d: DeviceState, net: WizardNetwork) -> bool {
     var frame: u8[>..] = [];
     frame.append("CONTINUUM / APPLY SHAPING\n--------------------------------------------------------------------------\n");
     frame.append(str("Router    ", d.candidate_id, "   phase ", d.phase, "\n\n"));
-    frame.append(str("Write ONE root qdisc on the WAN egress (", net.interface_id, "):\n\n  cake bandwidth ", net.upload_kbps,
-        "kbit overhead 0\n\n"));
+    frame.append(str("Write ONE shaping queue on the WAN egress (", if net.interface_id == "auto" { "found on the router" } else { net.interface_id }, ") at ", net.upload_kbps,
+        " kbit/s:\n\n  the first this router supports of CAKE, HTB + fq_codel, HTB + SFQ, TBF\n\n"));
     frame.append("Then read it back from the router (tc qdisc show). A rate the router\ndoes not hold is rolled back and refused. No other setting changes.\nReversible: [u] on the final screen restores the kernel default queue.\nThe LOAD gate re-opens: the next step measures this queue.\nNo model call.\n");
     frame.append("\n[Enter] Apply and read back\n[Esc] Cancel without writing");
     return setup_confirm(frame);
@@ -954,6 +956,13 @@ fn setup_wizard_advice(out: u8[>..]&, step: i64, reason: const u8[:]) {
     } else if setup_contains(reason, "has not answered") {
         out.append("  Check the router's power and cable. When it answers again, press\n");
         out.append("  Enter to verify persistence.\n");
+    } else if setup_contains(reason, "qdisc_shaping_unavailable") {
+        out.append("  This router's kernel refused every shaping queue Continuum knows\n");
+        out.append("  (CAKE, HTB + fq_codel, HTB + SFQ, TBF). Nothing was written;\n");
+        out.append("  steps 1-6 stand. Press Esc to stop.\n");
+    } else if setup_contains(reason, "wan_interface_unknown") {
+        out.append("  The router reported no WAN interface (no default route and no WAN\n");
+        out.append("  name in its settings). Connect its internet port, then press Enter.\n");
     } else if setup_contains(reason, "qdisc_cake_unavailable") {
         out.append("  This firmware's tc has no CAKE queue, so Continuum cannot shape\n");
         out.append("  here. Nothing was written; steps 1-6 stand. Press Esc to stop.\n");
@@ -1058,11 +1067,11 @@ fn setup_wizard_body(out: u8[>..]&, cfg: ModelConfig, network: const u8[:], key_
     } else if step == 6 {
         out.append("Continuum reads the router again and proves the owned baseline\nsurvived the restart: a new boot identity and every owned setting\nstill in force. Deterministic; no model call.\n");
     } else if step == 7 && !qos_checked {
-        out.append("Shaping is one CAKE root qdisc on the WAN egress. First a read-only\npreflight checks that the router has tc and reads its current root\nqueue. The preflight writes nothing.\n");
+        out.append("Shaping is one rate-limited queue on the router's WAN egress, the\nbest its kernel supports (CAKE, else HTB + fq_codel, HTB + SFQ, TBF).\nFirst a read-only preflight finds the WAN interface, checks for tc and\nreads the current root queue. The preflight writes nothing.\n");
     } else if step == 7 {
         out.append("Next: write ONE root qdisc and read it back from the router.\n");
-        if net.upload_kbps > 0 { out.append(str("Saved profile: cake ", net.upload_kbps, " kbit/s on ", net.interface_id, " ([c] changes it).\n")); }
-        else { out.append("The first apply asks once for your upload bandwidth and WAN\ninterface.\n"); }
+        if net.upload_kbps > 0 { out.append(str("Saved profile: ", net.upload_kbps, " kbit/s on ", if net.interface_id == "auto" { "the router's WAN" } else { net.interface_id }, " ([c] changes it).\n")); }
+        else { out.append("The first apply asks once for your upload bandwidth.\n"); }
     } else if step == 8 && evidence.len == 0 {
         out.append("One upload measurement across the WAN: idle probes, then the same\nprobes while uploading. Only an upload crosses the shaped queue.\nNothing on the router is written.\n");
         if net.target.len > 0 { out.append(str("\n  Target  ", net.target, "\n  Upload  POST ", net.load_path, "   ([c] changes them)\n")); }

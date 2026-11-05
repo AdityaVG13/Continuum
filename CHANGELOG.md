@@ -3,6 +3,18 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.3.0] - 2026-11-04
+
+- **Shaping works on routers without CAKE.** Step 7 no longer assumes one
+  queue type or one WAN name. It asks the router for its WAN device (default
+  route, then the vendor's nvram WAN names) and installs the first shaping
+  queue the router's kernel accepts: CAKE, else HTB with an fq_codel leaf, else
+  HTB with SFQ, else TBF. Every option rate-limits the upload and is read back
+  from the router before it counts; a refused option leaves nothing behind.
+  The receipt names the queue installed and what was tried. Stock ASUS
+  firmware, which has no CAKE, now gets HTB + fq_codel instead of a refusal.
+- The wizard no longer asks for the WAN interface; only the upload rate.
+
 ## [0.2.9] - 2026-11-04
 
 - **No login attempts with an old password on a reset router.** An ASUS counts

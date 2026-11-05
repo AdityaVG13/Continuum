@@ -7,11 +7,28 @@ namespace continuum;
 
 extern fn ct_asus_commission_json(req: const u8[:], receipt: u8[:], receipt_len: i64&) -> i32;
 
+// "auto" asks the router for its WAN device (default route, then vendor nvram);
+// any other name must be a kernel-legal interface name, since it reaches a shell.
+fn qos_interface_ok(iface: const u8[:]) -> bool {
+    if iface == "auto" { return true; }
+    if iface.len == 0 || iface.len > 15 || iface[0] == '-' || iface == "." || iface == ".." { return false; }
+    for c in iface {
+        let ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if !ok { return false; }
+    }
+    return true;
+}
+// "auto" walks cake -> htb_fq_codel -> htb_sfq -> tbf on the router and keeps
+// the first its kernel accepts; fq_codel (no rate limit) is only by name.
+fn qos_mode_ok(mode: const u8[:]) -> bool {
+    return mode == "auto" || mode == "cake" || mode == "htb_fq_codel" || mode == "htb_sfq" || mode == "tbf" || mode == "fq_codel";
+}
+
 // A QoS profile is validated before any device I/O: the caller chooses values,
 // never a shell string. The native adapter rechecks the same bounds.
 struct QosProfile {
     bandwidth_kbps: i64 = 0,
-    interface_id: u8[..8] = "",
+    interface_id: u8[..16] = "",
     mode: u8[..16] = "",
     overhead_bytes: i64 = 0,
 }
