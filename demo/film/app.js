@@ -739,14 +739,26 @@ READBACK   <span class="ok">verified on the router:</span>
 
   // Deterministic frame stepping for offline rendering (demo/film/render.mjs):
   // ?render=1 stops the clock; window.__frame(t, dt) draws exactly time t.
+  // The voiceover was recorded faster than the cue sheet, then padded with
+  // pauses to 3:00 (each pause sits after a line so its screen can be read).
+  // WARP maps voice time to cue-sheet time: [voice start of each line, cue t].
+  const WARP = [[0, 0], [4.64, 6], [10.05, 14], [14.45, 23], [20.14, 30], [27.68, 44], [34.07, 50], [45.45, 63], [56.75, 74], [69.11, 87], [75.91, 95], [86.16, 105], [95.18, 112], [104.24, 121], [116.11, 130], [125.9, 139], [131.96, 145], [140.09, 153], [155.09, 163], [169.61, 173], [176.33, 178], [180, 180]];
+  const warp = (t) => {
+    for (let i = 1; i < WARP.length; i++) {
+      const [a, fa] = WARP[i - 1], [b, fb] = WARP[i];
+      if (t <= b) return fa + (fb - fa) * Math.max(0, t - a) / (b - a);
+    }
+    return DURATION;
+  };
+  const rate = (t) => (warp(t + 0.01) - warp(t)) / 0.01;
   const rendering = params.has("render");
   if (rendering) {
     playing = false;
     app.classList.add("record", "render");
     window.__frame = (t, dt) => {
       time = t;
-      sync(time);
-      tickPackets(dt, time);
+      sync(warp(time));
+      tickPackets(dt * rate(time), warp(time));
       renderer.render(scene, camera);
       return true;
     };
@@ -759,8 +771,8 @@ READBACK   <span class="ok">verified on the router:</span>
       if (time >= DURATION) { time = DURATION; playing = false; }
     }
     try {
-      sync(time);
-      tickPackets(dt, time);
+      sync(warp(time));
+      tickPackets(dt * rate(time), warp(time));
       renderer.render(scene, camera);
     } catch (err) {
       console.error("film frame", time.toFixed(2), err);
