@@ -1018,7 +1018,8 @@ def drive_reset(unified, double, base_env, directory):
         def revision():
             req = urllib.request.Request("http://127.0.0.1:%d/api/status" % port, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=3) as response:
-                return json.load(response)["revision"]
+                status = json.load(response)
+            return status["revision"], status["failed_logins"]
 
         for _ in range(50):
             try:
@@ -1051,7 +1052,7 @@ def drive_reset(unified, double, base_env, directory):
         assert rebound["phase"] == "selected" and rebound["setup_approved"] is False, rebound
         assert rebound["connection"]["admin_ref"] != enrolled["connection"]["admin_ref"], \
             "re-enrollment must mint into a fresh slot, not reuse the dead password"
-        assert revision() == before, "the launch check must not write to the router"
+        assert revision() == before, "the launch check must neither write to the router nor try a login on it"
     finally:
         if process and process.poll() is None:
             process.kill()

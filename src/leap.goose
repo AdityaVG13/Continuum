@@ -716,6 +716,19 @@ fn fail_report(phase: const u8[:], reason: const u8[:]) -> LeapReport {
     return r;
 }
 
+// A factory unit answers its first-run wizard reads without a login. Probe that
+// before any login with a saved password: ASUS counts every refused login
+// (seen live on a GT-AX11000: after two, login_info showed error_status 10 with
+// a lock_time, and the correct new password was refused during setup). The
+// empty factory_user makes discover refuse instead of attempting admin/admin.
+fn leap_factory_open(base: LeapConfig) -> bool {
+    var cfg = base; cfg.factory_user = ""; cfg.factory_pass = "";
+    var req: u8[>..] = []; var resp: u8[>..] = [];
+    if !asus_discover_request(cfg, "", req) || leap_call(0, req, resp) != 0 { return false; }
+    let disc = parse_discover_receipt(resp);
+    return disc.ok && !disc.configured_flag && disc.secured_count == 0;
+}
+
 // --- the ceremony -----------------------------------------------------------
 
 fn run_leap(cfg: LeapConfig) -> LeapReport {
@@ -951,7 +964,7 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
     // restart was refused and the same staged credential authenticated a few
     // minutes later with nothing changed. AdminAuthFailed tells the owner to
     // paperclip-reset, so it needs a refusal that persists: poll up to ~5
-    // minutes (60 x 5 s) before classifying. radio_wait_sec 0 (loopback bench)
+    // minutes (20 x 15 s; each refused try counts toward the unit's lock) before classifying. radio_wait_sec 0 (loopback bench)
     // keeps one attempt.
     var authenticated = false;
     if joined_new {
@@ -959,12 +972,12 @@ fn run_leap(cfg: LeapConfig) -> LeapReport {
         if !asus_verify_request(cfg, bind, req) {
             return fail_report("verify", "request fields invalid");
         }
-        let attempts: i64 = if cfg.radio_wait_sec <= 0 { 1 } else { 60 };
+        let attempts: i64 = if cfg.radio_wait_sec <= 0 { 1 } else { 20 };
         var attempt: i64 = 0;
         var last_reason: u8[..256] = "";
         while attempt < attempts && !authenticated {
             if attempt > 0 {
-                leap_sleep_ms(5000);
+                leap_sleep_ms(15000);
                 print("leap: the router has not accepted the new admin password yet; checking again (", attempt + 1, " of ", attempts, ")");
             }
             resp.clear();

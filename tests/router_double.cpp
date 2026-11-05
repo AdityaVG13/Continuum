@@ -533,6 +533,7 @@ bool asus_authed(const Request &rq) {
 // apply are refused even with the right password, as the GT-AX11000 did live
 // while its radios and httpd settled (0.2.6). Proves verify waits, not judges.
 int g_refuse_after_apply = 0;
+long g_failed_logins = 0;
 void asus_login(int fd, const Request &rq) {
     if (g_refuse_after_apply > 0) {
         g_refuse_after_apply--;
@@ -547,7 +548,10 @@ void asus_login(int fd, const Request &rq) {
     bool ok = G.has_nvram && user == G.nvram["http_username"] &&
               const_eq(sha256_hex(pw), G.admin_pw_sha256);
     if (!ok) {
-        // Firmware answers 200 with the login page and no token.
+        // Firmware answers 200 with the login page and no token. A real ASUS
+        // counts these and starts refusing even the right password (lock_time),
+        // so /api/status reports the count for tests to hold at zero.
+        g_failed_logins++;
         text(fd, 200, "<html>Main_Login</html>");
         return;
     }
@@ -792,6 +796,7 @@ void handle(int fd, const Request &rq) {
                  "{\"revision\": " + std::to_string(G.revision) +
                      ", \"boot_id\": " + std::to_string(G.boot_id) +
                      ", \"sessions\": " + std::to_string(g_sessions.size()) +
+                     ", \"failed_logins\": " + std::to_string(g_failed_logins) +
                      ", \"setup_done\": " +
                      std::string(G.setup_done ? "true" : "false") +
                      ", \"ssid\": \"" + json_escape(G.ssid) +

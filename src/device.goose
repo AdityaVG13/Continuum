@@ -290,6 +290,12 @@ fn device_identity(d: DeviceState&, raw: const u8[:]) -> bool {
 }
 fn device_inventory(d: DeviceState, authorize: bool = false) -> DeviceObservation {
     if d.candidate_id.len == 0 { return DeviceObservation {}; }
+    // A reset unit would only count a refused login against the real one to
+    // come (see leap_factory_open). Skipped while a reboot is awaited: the
+    // unit is configured then and the probe would only double each timeout.
+    if d.phase != "reboot_pending" && leap_factory_open(d.connection) {
+        return DeviceObservation { reason: "protected_authentication_refused_factory_unit" };
+    }
     var raw: u8[>..] = [];
     if !commission_request(d.connection, if authorize { "authorize" } else { "inspect" }, "", false, raw, true) || raw.len > 8192 {
         var why: u8[..256] = "protected_device_observation_unavailable";

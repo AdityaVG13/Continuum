@@ -675,10 +675,13 @@ int32_t ct_asus_rotate(ct_bytes req, ct_output out, int64_t *out_len) {
         return rc;
     };
     // The proof of rotation is a fresh login; httpd may need a beat to
-    // adopt the credential, so the proof retries on a bounded clock.
+    // adopt the credential, so the proof retries on a bounded clock. After
+    // three quick tries it backs off to one try per 15 s for ~5 minutes: an
+    // ASUS that saw refused logins earlier refuses even the right password
+    // until its lock_time runs out, and every refused try counts again.
     auto prove_login = [&]() -> bool {
-        for (int i = 0; i < 3; i++) {
-            if (i) sleep(2);
+        for (int i = 0; i < 23; i++) {
+            if (i) sleep(i < 3 ? 2 : 15);
             if (asus_login(s, admin_user, admin_pw) == LoginRc::Ok)
                 return true;
         }

@@ -372,7 +372,8 @@ fn run_device_agent(model: ModelConfig, directory: const u8[:], message: const u
     // A router that refuses Continuum's saved admin password (typically a
     // factory reset since enrollment) cannot be worked by any tool; say so
     // before spending a model call.
-    if !opening.authenticated && opening.reason == "protected_authentication_refused" {
+    if !opening.authenticated && (opening.reason == "protected_authentication_refused" ||
+            opening.reason == "protected_authentication_refused_factory_unit") {
         ct_device_close(); report.reason = "protected_authentication_refused"; return report;
     }
     let input = device_agent_input(d, opening, message, model.max_tool_rounds);

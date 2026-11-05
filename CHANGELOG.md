@@ -3,6 +3,18 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.2.9] - 2026-11-04
+
+- **No login attempts with an old password on a reset router.** An ASUS counts
+  refused logins and, after two, refuses even the correct password for a few
+  minutes (its login page showed `error_status 10` with a `lock_time`).
+  Continuum tried the pre-reset password at launch and again before enrolling,
+  so the new password set during step 2 was refused (`rotate failed: refused`).
+  Every router check now first asks whether the router is still in its
+  first-run state, which needs no login, and skips the login if it is. The
+  login proofs during step 2 also wait out a lock (up to ~5 minutes) instead of
+  giving up after 6 seconds.
+
 ## [0.2.8] - 2026-11-04
 
 - **A router reset since the last run is caught at launch.** The wizard used to
