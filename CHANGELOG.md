@@ -3,6 +3,17 @@
 All notable changes to Continuum. This project is pre-1.0: surfaces change, and
 a capability listed here is listed with its evidence in `docs/STATUS.md`.
 
+## [0.3.2] - 2026-11-04
+
+- **Step 8 needs no typing.** The measurement uses a public far end
+  (`speed.cloudflare.com`) by default; `[c]` still names your own server.
+- **The measurement crosses the router.** Probes leave by the interface that
+  reaches the selected router, so a Mac with a second default route (a cable to
+  the ISP box) no longer measures around it.
+- **A router with no internet is not a measurement.** The ASUS no-WAN responder
+  (an unterminated 302) was counted as a successful probe; a probe now needs a
+  complete 2xx response, and the failure names the router's internet port.
+
 ## [0.3.1] - 2026-11-04
 
 - The WAN interface probe only accepts a candidate whose root queue `tc` can
